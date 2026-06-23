@@ -1,19 +1,15 @@
+# environment files
+.env
+frontend/.env
+backend/.env
+admin/.env
+
 # dependencies
 node_modules/
 
-# env files
-.env
-
-# build files
+# build outputs
 dist/
 build/
 
 # logs
 *.log
-
-.env
-
-.env
-frontend/.env
-backend/.env
-node_modules/
