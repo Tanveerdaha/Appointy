@@ -3,6 +3,26 @@ import { toast } from "react-toastify";
 import axios from 'axios'
 import { doctors as localDoctors } from "../assets/assets";
 
+axios.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        if (error.response?.status === 401) {
+            localStorage.removeItem('token')
+            window.location.href = '/login'
+        }
+        return Promise.reject(error)
+    }
+)
+
+axios.interceptors.request.use((config) => {
+    const token = localStorage.getItem('token')
+    if (token) {
+        config.headers.token = token
+        config.headers.Authorization = `Bearer ${token}`
+    }
+    return config
+})
+
 export const AppContext = createContext()
 
 const DEFAULT_BACKEND_URL = 'http://localhost:4000'

@@ -3,6 +3,7 @@ import { DoctorContext } from '../../context/DoctorContext'
 import { AppContext } from '../../context/AppContext'
 import { toast } from 'react-toastify'
 import axios from 'axios'
+import LoadingSpinner from '../../components/LoadingSpinner'
 
 const DoctorProfile = () => {
 
@@ -21,7 +22,7 @@ const DoctorProfile = () => {
                 available: profileData.available
             }
 
-            const { data } = await axios.post(backendUrl + '/api/doctor/update-profile', updateData, { headers: { dToken } })
+            const { data } = await axios.post(backendUrl + '/api/doctor/update-profile', updateData, { headers: { Authorization: `Bearer ${dToken}` } })
 
             if (data.success) {
                 toast.success(data.message)
@@ -30,8 +31,6 @@ const DoctorProfile = () => {
             } else {
                 toast.error(data.message)
             }
-
-            setIsEdit(false)
 
         } catch (error) {
             toast.error(error.message)
@@ -46,7 +45,7 @@ const DoctorProfile = () => {
         }
     }, [dToken])
 
-    return profileData && (
+    return profileData ? (
         <div>
             <div className='flex flex-col gap-4 m-5'>
                 <div>
@@ -82,14 +81,14 @@ const DoctorProfile = () => {
                     <div className='flex gap-2 py-2'>
                         <p>Address:</p>
                         <p className='text-sm'>
-                            {isEdit ? <input type='text' onChange={(e) => setProfileData(prev => ({ ...prev, address: { ...prev.address, line1: e.target.value } }))} value={profileData.address.line1} /> : profileData.address.line1}
+                            {isEdit ? <input type='text' onChange={(e) => setProfileData(prev => ({ ...prev, address: { ...prev.address, line1: e.target.value } }))} value={profileData.address?.line1 || ''} /> : (profileData.address?.line1 || '')}
                             <br />
-                            {isEdit ? <input type='text' onChange={(e) => setProfileData(prev => ({ ...prev, address: { ...prev.address, line2: e.target.value } }))} value={profileData.address.line2} /> : profileData.address.line2}
+                            {isEdit ? <input type='text' onChange={(e) => setProfileData(prev => ({ ...prev, address: { ...prev.address, line2: e.target.value } }))} value={profileData.address?.line2 || ''} /> : (profileData.address?.line2 || '')}
                         </p>
                     </div>
 
                     <div className='flex gap-1 pt-2'>
-                        <input type="checkbox" onChange={() => isEdit && setProfileData(prev => ({ ...prev, available: !prev.available }))} checked={profileData.available} />
+                        <input type="checkbox" disabled={!isEdit} onChange={() => isEdit && setProfileData(prev => ({ ...prev, available: !prev.available }))} checked={profileData.available} />
                         <label htmlFor="">Available</label>
                     </div>
 
@@ -102,6 +101,8 @@ const DoctorProfile = () => {
                 </div>
             </div>
         </div>
+    ) : (
+        <LoadingSpinner label='Loading profile...' />
     )
 }
 

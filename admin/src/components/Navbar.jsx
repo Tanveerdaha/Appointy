@@ -4,61 +4,40 @@ import { DoctorContext } from '../context/DoctorContext'
 import { AdminContext } from '../context/AdminContext'
 import { useNavigate, useLocation } from 'react-router-dom'
 
-const Navbar = () => {
-  const { dToken, setDToken } = useContext(DoctorContext)
+const Navbar = ({ onMenuOpen }) => {
+  const { setDToken } = useContext(DoctorContext)
   const { aToken, setAToken } = useContext(AdminContext)
   const navigate = useNavigate()
   const location = useLocation()
+  const patientUrl = import.meta.env.VITE_PATIENT_URL || 'http://localhost:5173'
 
   const logout = () => {
     navigate('/')
-    dToken && setDToken('')
-    dToken && localStorage.removeItem('dToken')
-    aToken && setAToken('')
-    aToken && localStorage.removeItem('aToken')
+    setDToken('')
+    setAToken('')
+    localStorage.removeItem('dToken')
+    localStorage.removeItem('aToken')
   }
 
-  const goToUserPanel = () => {
-    window.location.href = 'https://appointy-roan.vercel.app/'
-  }
-
-  const isOnDashboard =
-    location.pathname === '/admin-dashboard' ||
-    location.pathname === '/doctor-dashboard'
+  const isOnDashboard = location.pathname === '/admin-dashboard' || location.pathname === '/doctor-dashboard'
 
   return (
-    <div className='flex justify-between items-center px-4 sm:px-10 py-3 border-b bg-white'>
-      <div className='flex items-center gap-3 text-xs'>
-
-        {/* Logo */}
-        <img
-          onClick={() => navigate('/')}
-          className='w-36 sm:w-40 cursor-pointer'
-          src={assets.admin_logo}
-          alt="Logo"
-        />
-
-        {/* Role Label */}
-        <p className='border px-2.5 py-0.5 rounded-full border-gray-500 text-gray-600'>
+    <div className='flex justify-between items-center px-4 sm:px-10 py-3 border-b bg-white gap-2'>
+      <div className='flex items-center gap-2 sm:gap-3 text-xs flex-1 min-w-0'>
+        <button type='button' className='md:hidden p-1' onClick={onMenuOpen} aria-label='Open menu'>
+          <img className='w-6' src={assets.add_icon} alt="" />
+        </button>
+        <img onClick={() => navigate('/')} className='w-28 sm:w-36 cursor-pointer flex-shrink-0' src={assets.admin_logo} alt="Logo" />
+        <p className='border px-2 py-0.5 rounded-full border-gray-500 text-gray-600 flex-shrink-0'>
           {aToken ? 'Admin' : 'Doctor'}
         </p>
-
-        {/* User Panel Button (visible on both dashboards) */}
         {isOnDashboard && (
-          <button
-            onClick={goToUserPanel}
-            className='ml-2 text-white bg-primary hover:bg-gray-700 px-3 py-1.5 rounded-full text-xs'
-          >
+          <button onClick={() => window.open(patientUrl, '_blank')} className='hidden sm:block text-white bg-primary hover:bg-gray-700 px-3 py-1.5 rounded-full text-xs flex-shrink-0'>
             User Panel
           </button>
         )}
       </div>
-
-      {/* Logout */}
-      <button
-        onClick={logout}
-        className='bg-primary text-white text-sm px-10 py-2 rounded-full'
-      >
+      <button onClick={logout} className='bg-primary text-white text-xs sm:text-sm px-4 sm:px-8 py-2 rounded-full flex-shrink-0'>
         Logout
       </button>
     </div>

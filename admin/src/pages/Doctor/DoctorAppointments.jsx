@@ -7,7 +7,7 @@ import { assets } from '../../assets/assets'
 const DoctorAppointments = () => {
 
   const { dToken, appointments, getAppointments, cancelAppointment, completeAppointment } = useContext(DoctorContext)
-  const { slotDateFormat, calculateAge, currency } = useContext(AppContext)
+  const { slotDateFormat, calculateAge, currency, getId } = useContext(AppContext)
 
   useEffect(() => {
     if (dToken) {
@@ -49,8 +49,8 @@ const DoctorAppointments = () => {
               : item.isCompleted
                 ? <p className='text-green-500 text-xs font-medium'>Completed</p>
                 : <div className='flex'>
-                  <img onClick={() => cancelAppointment(item._id)} className='w-10 cursor-pointer' src={assets.cancel_icon} alt="" />
-                  <img onClick={() => completeAppointment(item._id)} className='w-10 cursor-pointer' src={assets.tick_icon} alt="" />
+                  <img onClick={() => cancelAppointment(getId(item))} className='w-10 cursor-pointer' src={assets.cancel_icon} alt="" />
+                  <img onClick={() => completeAppointment(getId(item))} className='w-10 cursor-pointer' src={assets.tick_icon} alt="" />
                 </div>
             }
           </div>

@@ -1,11 +1,11 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { assets } from '../assets/assets';
 
 const Footer = () => {
   return (
     <div className="px-6 md:px-10">
       <div className="grid md:grid-cols-[3fr_1fr_1fr] gap-12 my-10 mt-24 text-sm items-start">
-        {/* Left Section */}
         <div className="flex items-start gap-4">
   <img className="w-28 mt-1" src={assets.logo} alt="Appointy Logo" />
   <p className="text-gray-600 leading-6 md:max-w-[75%]">
@@ -15,19 +15,17 @@ const Footer = () => {
   </p>
 </div>
 
-
-        {/* Middle Section */}
         <div>
           <p className="text-lg font-semibold mb-4">COMPANY</p>
           <ul className="flex flex-col gap-2 text-gray-600">
-            <li>Home</li>
-            <li>About Us</li>
-            <li>Contact Us</li>
-            <li>Privacy Policy</li>
+            <li><Link to="/" className="hover:text-primary">Home</Link></li>
+            <li><Link to="/about" className="hover:text-primary">About Us</Link></li>
+            <li><Link to="/contact" className="hover:text-primary">Contact Us</Link></li>
+            <li><Link to="/privacy" className="hover:text-primary">Privacy Policy</Link></li>
+            <li><Link to="/terms" className="hover:text-primary">Terms of Service</Link></li>
           </ul>
         </div>
 
-        {/* Right Section */}
         <div>
           <p className="text-lg font-semibold mb-4">GET IN TOUCH</p>
           <ul className="flex flex-col gap-2 text-gray-600">
@@ -37,7 +35,6 @@ const Footer = () => {
         </div>
       </div>
 
-      {/* Bottom Footer */}
       <hr className="border-gray-300" />
       <p className="py-4 text-sm text-center text-gray-600">
         © 2025 appointy.in — All Rights Reserved.

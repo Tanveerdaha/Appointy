@@ -1,4 +1,5 @@
-import React, { useContext, useEffect, useState } from 'react'
+import React, { useContext, useState } from 'react'
+import { Navigate } from 'react-router-dom'
 import { AppContext } from '../context/AppContext'
 import axios from 'axios'
 import { toast } from 'react-toastify'
@@ -40,6 +41,10 @@ const MyProfile = () => {
             console.log(error)
             toast.error(error.response?.data?.message || error.message)
         }
+    }
+
+    if (!token) {
+        return <Navigate to="/login" replace />
     }
 
     return userData ? (
@@ -154,7 +159,9 @@ const MyProfile = () => {
                 )}
             </div>
         </div>
-    ) : null
+    ) : (
+        <p className="pt-10 text-gray-500">Loading profile...</p>
+    )
 }
 
 export default MyProfile

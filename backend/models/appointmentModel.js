@@ -47,6 +47,10 @@ const Appointment = sequelize.define('Appointment', {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
   },
+  paymentStatus: {
+    type: DataTypes.STRING,
+    defaultValue: 'unpaid',
+  },
   isCompleted: {
     type: DataTypes.BOOLEAN,
     defaultValue: false,

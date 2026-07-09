@@ -6,32 +6,25 @@ echo "======================================"
 echo "Appointy - System Setup"
 echo "======================================"
 
-# Check if MySQL is installed
 echo ""
-echo "[1/4] Checking MySQL installation..."
+echo "[1/4] Database setup..."
+echo "SQLite is used by default (no MySQL required for local dev)."
+echo "Set DB_DIALECT=mysql in backend/.env to use MySQL instead."
+
 if command -v mysql &> /dev/null; then
-    echo "✓ MySQL found"
+    echo "MySQL found — creating database if using MySQL..."
+    mysql -u root -e "CREATE DATABASE IF NOT EXISTS appointy; SHOW DATABASES LIKE 'appointy';" 2>/dev/null
+    if [ $? -eq 0 ]; then
+        echo "✓ Database 'appointy' ready (for MySQL mode)"
+    else
+        echo "! Could not create MySQL database. SQLite will still work."
+    fi
 else
-    echo "✗ MySQL not found. Please install MySQL:"
-    echo "  Windows: Download from https://dev.mysql.com/downloads/mysql/"
-    echo "  macOS: brew install mysql"
-    echo "  Linux: sudo apt-get install mysql-server"
-    exit 1
+    echo "MySQL not installed — skipping (SQLite works out of the box)."
 fi
 
-# Create database
 echo ""
-echo "[2/4] Creating database..."
-mysql -u root -e "CREATE DATABASE IF NOT EXISTS appointy; SHOW DATABASES LIKE 'appointy';" 2>/dev/null
-if [ $? -eq 0 ]; then
-    echo "✓ Database 'appointy' ready"
-else
-    echo "! Note: Could not create database. Server will auto-create on first run."
-fi
-
-# Check dependencies
-echo ""
-echo "[3/4] Checking dependencies..."
+echo "[2/4] Checking dependencies..."
 if [ -d "backend/node_modules" ]; then
     echo "✓ Backend dependencies installed"
 else
@@ -48,6 +41,18 @@ if [ -d "admin/node_modules" ]; then
     echo "✓ Admin dependencies installed"
 else
     echo "✗ Admin dependencies missing. Run: cd admin && npm install"
+fi
+
+echo ""
+echo "[3/4] Environment files..."
+if [ ! -f "backend/.env" ]; then
+    echo "! Copy backend/.env.example to backend/.env and configure values"
+fi
+if [ ! -f "frontend/.env" ]; then
+    echo "! Copy frontend/.env.example to frontend/.env"
+fi
+if [ ! -f "admin/.env" ]; then
+    echo "! Copy admin/.env.example to admin/.env"
 fi
 
 echo ""

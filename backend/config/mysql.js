@@ -40,11 +40,18 @@ export const connectDB = async () => {
     console.log(
       dialect === 'mysql' ? 'MySQL Database Connected' : 'SQLite Database Connected'
     );
-    await sequelize.sync({ alter: true });
-    console.log('Database models synchronized');
+    if (process.env.USE_MIGRATIONS === 'true') {
+      console.log('Using migrations (run npm run db:migrate to apply)');
+    } else {
+      await sequelize.sync(process.env.NODE_ENV === 'production' ? { alter: false } : { alter: true });
+      console.log('Database models synchronized');
+    }
   } catch (error) {
     console.error('Database connection error:', error);
-    process.exit(1);
+    if (process.env.NODE_ENV !== 'test') {
+      process.exit(1);
+    }
+    throw error;
   }
 };
 

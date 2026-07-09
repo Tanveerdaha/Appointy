@@ -29,6 +29,12 @@ const AddDoctor = () => {
       if (!docImg) {
         return toast.error('Image Not Selected');
       }
+      if (password.length < 8) {
+        return toast.error('Password must be at least 8 characters');
+      }
+      if (!about.trim()) {
+        return toast.error('About doctor is required');
+      }
 
       const formData = new FormData();
 
@@ -42,11 +48,6 @@ const AddDoctor = () => {
       formData.append('speciality', speciality);
       formData.append('degree', degree);
       formData.append('address', JSON.stringify({ line1: address1, line2: address2 }));
-
-      // Debugging FormData (optional, can remove later)
-      formData.forEach((value, key) => {
-        console.log(`${key}: ${value}`);
-      });
 
       const response = await axios.post(`${backendUrl}/api/admin/add-doctor`, formData, {
         headers: { aToken}  })
@@ -104,7 +105,7 @@ const AddDoctor = () => {
 
             <div className='flex-1 flex flex-col gap-1'>
               <p>Set Password</p>
-              <input onChange={e => setPassword(e.target.value)} value={password} className='border rounded px-3 py-2' type="password" placeholder='Password' required />
+              <input onChange={e => setPassword(e.target.value)} value={password} className='border rounded px-3 py-2' type="password" placeholder='Password (min 8 chars)' minLength={8} required />
             </div>
 
             <div className='flex-1 flex flex-col gap-1'>
@@ -116,6 +117,7 @@ const AddDoctor = () => {
                 <option value="4 Year">4 Years</option>
                 <option value="5 Year">5 Years</option>
                 <option value="6 Year">6 Years</option>
+                <option value="7 Year">7 Years</option>
                 <option value="8 Year">8 Years</option>
                 <option value="9 Year">9 Years</option>
                 <option value="10 Year">10+ Years</option>
@@ -161,7 +163,7 @@ const AddDoctor = () => {
 
         <div>
           <p className='mt-4 mb-2'>About Doctor</p>
-          <textarea onChange={e => setAbout(e.target.value)} value={about} className='w-full px-4 pt-2 border rounded' rows={5} placeholder='write about doctor'></textarea>
+          <textarea onChange={e => setAbout(e.target.value)} value={about} className='w-full px-4 pt-2 border rounded' rows={5} placeholder='Write about doctor' required></textarea>
         </div>
 
         <button type='submit' className='bg-primary px-10 py-3 mt-4 text-white rounded-full'>Add doctor</button>

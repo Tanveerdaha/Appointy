@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
+import { Op } from "sequelize";
 import Doctor from "../models/doctorModel.js";
 import Appointment from "../models/appointmentModel.js";
 
@@ -18,7 +19,7 @@ const loginDoctor = async (req, res) => {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
     }
 
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET);
+    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
     res.json({ success: true, token });
   } catch (error) {
     console.error(error);
@@ -50,6 +51,18 @@ const appointmentCancel = async (req, res) => {
     }
 
     await Appointment.update({ cancelled: true }, { where: { id: appointmentId } });
+
+    const { docId: appointmentDocId, slotDate, slotTime } = appointment;
+    const doctorData = await Doctor.findByPk(appointmentDocId);
+
+    if (doctorData) {
+      let slots_booked = doctorData.slots_booked || {};
+      if (slots_booked[slotDate]) {
+        slots_booked[slotDate] = slots_booked[slotDate].filter((e) => e !== slotTime);
+      }
+      await Doctor.update({ slots_booked }, { where: { id: appointmentDocId } });
+    }
+
     res.json({ success: true, message: "Appointment Cancelled" });
   } catch (error) {
     console.error(error);
@@ -79,7 +92,16 @@ const appointmentComplete = async (req, res) => {
 // Get all doctors (for frontend list)
 const doctorList = async (req, res) => {
   try {
+    const { search, speciality } = req.query
+    const where = {}
+    if (search) {
+      where.name = { [Op.like]: `%${search}%` }
+    }
+    if (speciality) {
+      where.speciality = { [Op.like]: `%${speciality}%` }
+    }
     const doctors = await Doctor.findAll({
+      where,
       attributes: { exclude: ['password', 'email'] }
     });
     res.json({ success: true, doctors });
@@ -92,10 +114,14 @@ const doctorList = async (req, res) => {
 // Toggle doctor's availability
 const changeAvailability = async (req, res) => {
   try {
-    const { docId } = req.body;
+    const docId = req.user?.id || req.body.docId;
 
     if (!docId) {
       return res.status(400).json({ success: false, message: "Doctor ID missing" });
+    }
+
+    if (req.user?.id && req.body.docId && req.body.docId !== req.user.id) {
+      return res.status(403).json({ success: false, message: "Unauthorized action" });
     }
 
     const doctor = await Doctor.findByPk(docId);
