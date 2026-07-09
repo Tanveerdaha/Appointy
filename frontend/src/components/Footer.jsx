@@ -29,7 +29,7 @@ const Footer = () => {
         <div>
           <p className="text-lg font-semibold mb-4">GET IN TOUCH</p>
           <ul className="flex flex-col gap-2 text-gray-600">
-            <li>+91-90000-90000</li>
+            <li>+92 3123456789</li>
             <li>customersupport@appointy.in</li>
           </ul>
         </div>

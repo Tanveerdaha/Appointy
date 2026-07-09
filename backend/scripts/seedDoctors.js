@@ -37,7 +37,7 @@ const doctorsData = [
     experience: '4 Years',
     about:
       'Dr. Richard James has a strong commitment to delivering comprehensive medical care, focusing on preventive medicine, early diagnosis, and effective treatment strategies.',
-    fees: 50,
+    fees: 1800,
     address: { line1: '17th Cross, Richmond', line2: 'Circle, Ring Road, London' },
   },
   {
@@ -49,7 +49,7 @@ const doctorsData = [
     experience: '3 Years',
     about:
       'Dr. Emily Larson is dedicated to providing exceptional women\'s healthcare with a focus on patient comfort, thorough diagnosis, and personalized treatment plans.',
-    fees: 60,
+    fees: 2000,
     address: { line1: '27th Cross, Richmond', line2: 'Circle, Ring Road, London' },
   },
   {
@@ -61,7 +61,7 @@ const doctorsData = [
     experience: '1 Years',
     about:
       'Dr. Sarah Patel specializes in diagnosing and treating skin conditions with a patient-centered approach, utilizing the latest dermatological techniques and treatments.',
-    fees: 30,
+    fees: 1500,
     address: { line1: '37th Cross, Richmond', line2: 'Circle, Ring Road, London' },
   },
   {
@@ -73,7 +73,7 @@ const doctorsData = [
     experience: '2 Years',
     about:
       'Dr. Christopher Lee is passionate about children\'s health, providing gentle and thorough pediatric care from infancy through adolescence.',
-    fees: 40,
+    fees: 1650,
     address: { line1: '47th Cross, Richmond', line2: 'Circle, Ring Road, London' },
   },
   {
@@ -85,7 +85,7 @@ const doctorsData = [
     experience: '4 Years',
     about:
       'Dr. Jennifer Garcia brings extensive expertise in neurological disorders, offering advanced diagnostic and treatment options for complex neurological conditions.',
-    fees: 50,
+    fees: 1800,
     address: { line1: '57th Cross, Richmond', line2: 'Circle, Ring Road, London' },
   },
   {
@@ -97,7 +97,7 @@ const doctorsData = [
     experience: '4 Years',
     about:
       'Dr. Andrew Williams is a skilled neurologist with deep expertise in treating disorders of the nervous system, committed to improving patient outcomes through evidence-based care.',
-    fees: 50,
+    fees: 1750,
     address: { line1: '57th Cross, Richmond', line2: 'Circle, Ring Road, London' },
   },
   {
@@ -109,7 +109,7 @@ const doctorsData = [
     experience: '4 Years',
     about:
       'Dr. Christopher Davis has a strong commitment to delivering comprehensive medical care, focusing on preventive medicine, early diagnosis, and effective treatment strategies.',
-    fees: 50,
+    fees: 1800,
     address: { line1: '17th Cross, Richmond', line2: 'Circle, Ring Road, London' },
   },
   {
@@ -121,7 +121,7 @@ const doctorsData = [
     experience: '3 Years',
     about:
       'Dr. Timothy White provides expert gynecological care with a compassionate approach, specializing in preventive screenings and minimally invasive procedures.',
-    fees: 60,
+    fees: 2000,
     address: { line1: '27th Cross, Richmond', line2: 'Circle, Ring Road, London' },
   },
   {
@@ -133,7 +133,7 @@ const doctorsData = [
     experience: '1 Years',
     about:
       'Dr. Ava Mitchell is a dedicated dermatologist focused on providing personalized skincare solutions, from medical dermatology to cosmetic treatments.',
-    fees: 30,
+    fees: 1500,
     address: { line1: '37th Cross, Richmond', line2: 'Circle, Ring Road, London' },
   },
   {
@@ -145,7 +145,7 @@ const doctorsData = [
     experience: '2 Years',
     about:
       'Dr. Jeffrey King is committed to providing comprehensive pediatric care, ensuring the health and well-being of children through attentive and compassionate medical practice.',
-    fees: 40,
+    fees: 1650,
     address: { line1: '47th Cross, Richmond', line2: 'Circle, Ring Road, London' },
   },
   {
@@ -157,7 +157,7 @@ const doctorsData = [
     experience: '4 Years',
     about:
       'Dr. Zoe Kelly is an experienced neurologist who specializes in diagnosing and managing a wide range of neurological conditions with a patient-first philosophy.',
-    fees: 50,
+    fees: 1900,
     address: { line1: '57th Cross, Richmond', line2: 'Circle, Ring Road, London' },
   },
   {
@@ -169,7 +169,7 @@ const doctorsData = [
     experience: '4 Years',
     about:
       'Dr. Patrick Harris is a gastroenterology specialist focused on digestive health, offering expert diagnosis and treatment for gastrointestinal disorders.',
-    fees: 50,
+    fees: 1950,
     address: { line1: '57th Cross, Richmond', line2: 'Circle, Ring Road, London' },
   },
   {
@@ -181,7 +181,7 @@ const doctorsData = [
     experience: '4 Years',
     about:
       'Dr. Chloe Evans provides holistic primary care with a focus on long-term patient wellness, preventive health measures, and chronic disease management.',
-    fees: 50,
+    fees: 1800,
     address: { line1: '17th Cross, Richmond', line2: 'Circle, Ring Road, London' },
   },
   {
@@ -193,7 +193,7 @@ const doctorsData = [
     experience: '3 Years',
     about:
       'Dr. Ryan Martinez offers comprehensive gynecological services with a focus on reproductive health, preventive care, and patient education.',
-    fees: 60,
+    fees: 2000,
     address: { line1: '27th Cross, Richmond', line2: 'Circle, Ring Road, London' },
   },
   {
@@ -205,7 +205,7 @@ const doctorsData = [
     experience: '1 Years',
     about:
       'Dr. Amelia Hill is a compassionate dermatologist committed to helping patients achieve healthy skin through evidence-based treatments and preventive care strategies.',
-    fees: 30,
+    fees: 1500,
     address: { line1: '37th Cross, Richmond', line2: 'Circle, Ring Road, London' },
   },
 ];

@@ -46,13 +46,16 @@ fi
 echo ""
 echo "[3/4] Environment files..."
 if [ ! -f "backend/.env" ]; then
-    echo "! Copy backend/.env.example to backend/.env and configure values"
+    cp backend/.env.example backend/.env
+    echo "✓ Created backend/.env from example"
 fi
 if [ ! -f "frontend/.env" ]; then
-    echo "! Copy frontend/.env.example to frontend/.env"
+    cp frontend/.env.example frontend/.env
+    echo "✓ Created frontend/.env from example"
 fi
 if [ ! -f "admin/.env" ]; then
-    echo "! Copy admin/.env.example to admin/.env"
+    cp admin/.env.example admin/.env
+    echo "✓ Created admin/.env from example"
 fi
 
 echo ""

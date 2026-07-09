@@ -28,7 +28,7 @@ export const AppContext = createContext()
 const DEFAULT_BACKEND_URL = 'http://localhost:4000'
 
 const AppContextProvider = (props) => {
-    const currencySymbol = '₹'
+    const currencySymbol = 'Rs.'
     const backendUrl = import.meta.env.VITE_BACKEND_URL || DEFAULT_BACKEND_URL
 
     const [doctors, setDoctors] = useState([])

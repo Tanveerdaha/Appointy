@@ -37,7 +37,7 @@ const Contact = () => {
         <div className='flex flex-col justify-center items-start gap-6 flex-1'>
           <p className='font-semibold text-lg text-gray-600'>OUR OFFICE</p>
           <p className='text-gray-500'>54709 Willms Station <br /> Suite 350, Washington, USA</p>
-          <p className='text-gray-500'>Tel: (415) 555-0132 <br /> Email: customersupport@appointy.in</p>
+          <p className='text-gray-500'>Tel: +92 3123456789 <br /> Email: customersupport@appointy.in</p>
 
           <form onSubmit={handleSubmit} className='w-full max-w-md flex flex-col gap-3'>
             <p className='font-semibold text-lg text-gray-600'>SEND US A MESSAGE</p>
