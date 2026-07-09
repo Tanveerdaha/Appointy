@@ -1,6 +1,6 @@
 import React, { useContext } from 'react'
 import { Navigate } from 'react-router-dom'
-import { AppContext } from '../context/AppContext'
+import { AppContext } from '../context/appContext'
 
 const ProtectedRoute = ({ children }) => {
   const { token } = useContext(AppContext)

@@ -1,6 +1,6 @@
-import React, { useContext, useEffect, useState } from 'react'
+import React, { useCallback, useContext, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AppContext } from '../context/AppContext'
+import { AppContext } from '../context/appContext'
 import axios from 'axios'
 import { toast } from 'react-toastify'
 import { assets } from '../assets/assets'
@@ -24,7 +24,7 @@ const MyAppointments = () => {
     return `${day} ${months[Number(month)]} ${year}`
   }
 
-  const getUserAppointments = async () => {
+  const getUserAppointments = useCallback(async () => {
     try {
       const { data } = await axios.get(`${backendUrl}/api/user/appointments`, {
         headers: { token, Authorization: `Bearer ${token}` },
@@ -39,7 +39,7 @@ const MyAppointments = () => {
     } finally {
       setLoading(false)
     }
-  }
+  }, [backendUrl, token])
 
   const cancelAppointment = async (appointmentId) => {
     try {
@@ -112,7 +112,7 @@ const MyAppointments = () => {
 
   useEffect(() => {
     if (token) getUserAppointments()
-  }, [token])
+  }, [token, getUserAppointments])
 
   if (loading) return <LoadingSpinner label='Loading appointments...' />
 

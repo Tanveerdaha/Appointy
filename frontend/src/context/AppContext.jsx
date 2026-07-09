@@ -1,7 +1,8 @@
-import { createContext, useEffect, useState } from "react";
-import { toast } from "react-toastify";
+import { useCallback, useEffect, useState } from 'react'
+import { toast } from 'react-toastify'
 import axios from 'axios'
-import { doctors as localDoctors } from "../assets/assets";
+import { doctors as localDoctors } from '../assets/assets'
+import { AppContext } from './appContext'
 
 axios.interceptors.response.use(
     (response) => response,
@@ -23,9 +24,16 @@ axios.interceptors.request.use((config) => {
     return config
 })
 
-export const AppContext = createContext()
-
 const DEFAULT_BACKEND_URL = 'http://localhost:4000'
+
+const normalizeDoctor = (doc) => ({
+    ...doc,
+    id: doc.id ?? doc._id,
+    _id: doc._id ?? doc.id,
+    slots_booked: doc.slots_booked ?? {},
+    available: doc.available ?? true,
+    address: doc.address ?? { line1: '', line2: '' },
+})
 
 const AppContextProvider = (props) => {
     const currencySymbol = 'Rs.'
@@ -35,17 +43,7 @@ const AppContextProvider = (props) => {
     const [token, setToken] = useState(localStorage.getItem('token') || '')
     const [userData, setUserData] = useState(false)
 
-    const normalizeDoctor = (doc) => ({
-        ...doc,
-        id: doc.id ?? doc._id,
-        _id: doc._id ?? doc.id,
-        slots_booked: doc.slots_booked ?? {},
-        available: doc.available ?? true,
-        address: doc.address ?? { line1: '', line2: '' },
-    })
-
-    const getDoctorsData = async () => {
-        // If backend isn't configured, use local seeded doctor assets
+    const getDoctorsData = useCallback(async () => {
         if (!backendUrl) {
             setDoctors(localDoctors.map(normalizeDoctor))
             return
@@ -59,16 +57,15 @@ const AppContextProvider = (props) => {
             }
         } catch (error) {
             console.log(error)
-            // Fall back to local data so UI still works offline
             setDoctors(localDoctors.map(normalizeDoctor))
             toast.error(error.message || 'Failed to load doctors from API, showing local data')
         }
-    }
+    }, [backendUrl])
 
-    const loadUserProfileData = async () => {
+    const loadUserProfileData = useCallback(async () => {
         try {
             const { data } = await axios.get(backendUrl + '/api/user/get-profile', {
-                headers: { token }
+                headers: { token },
             })
 
             if (data.success) {
@@ -77,7 +74,7 @@ const AppContextProvider = (props) => {
                     address: data.userData.address || { line1: '', line2: '' },
                     gender: data.userData.gender === 'Not Selected' ? '' : (data.userData.gender || ''),
                     dob: data.userData.dob === 'Not Selected' ? '' : (data.userData.dob || ''),
-                    image: data.userData.image || ''
+                    image: data.userData.image || '',
                 }
                 setUserData(safeUserData)
             } else {
@@ -87,24 +84,28 @@ const AppContextProvider = (props) => {
             console.log(error)
             toast.error(error.message)
         }
-    }
+    }, [backendUrl, token])
 
     useEffect(() => {
         getDoctorsData()
-    }, [])
+    }, [getDoctorsData])
 
     useEffect(() => {
         if (token) {
             loadUserProfileData()
         }
-    }, [token])
+    }, [token, loadUserProfileData])
 
     const value = {
-        doctors, getDoctorsData,
+        doctors,
+        getDoctorsData,
         currencySymbol,
         backendUrl,
-        token, setToken,
-        userData, setUserData, loadUserProfileData
+        token,
+        setToken,
+        userData,
+        setUserData,
+        loadUserProfileData,
     }
 
     return (
