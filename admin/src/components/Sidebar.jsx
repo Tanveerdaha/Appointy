@@ -22,14 +22,15 @@ const doctorLinks = [
 const Sidebar = ({ mobileOpen, onClose }) => {
   const { dToken } = useContext(DoctorContext)
   const { aToken } = useContext(AdminContext)
-  const links = aToken ? adminLinks : doctorLinks
+  const isAdmin = !!(aToken || localStorage.getItem('aToken'))
+  const links = isAdmin ? adminLinks : doctorLinks
 
   return (
     <>
       {mobileOpen && (
         <div className='fixed inset-0 bg-black/40 z-30 md:hidden' onClick={onClose} />
       )}
-      <div className={`fixed md:static z-40 min-h-screen bg-white border-r transition-transform md:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+      <div className={`fixed md:static z-40 min-h-screen bg-white border-r w-64 max-w-[80vw] transition-transform md:translate-x-0 ${mobileOpen ? 'translate-x-0 pointer-events-auto' : '-translate-x-full pointer-events-none md:pointer-events-auto md:translate-x-0'}`}>
         <ul className='text-[#515151] mt-5'>
           {links.map((link) => (
             <NavLink

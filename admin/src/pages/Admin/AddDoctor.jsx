@@ -1,9 +1,7 @@
-import React, { useContext, useState } from 'react'
+import React, { useState } from 'react'
 import { assets } from '../../assets/assets'
 import { toast } from 'react-toastify'
-import axios from 'axios'
-import { AdminContext } from '../../context/AdminContext'
-import { AppContext } from '../../context/AppContext'
+import api from '../../api/client'
 
 const AddDoctor = () => {
 
@@ -18,9 +16,6 @@ const AddDoctor = () => {
   const [degree, setDegree] = useState('')
   const [address1, setAddress1] = useState('')
   const [address2, setAddress2] = useState('')
-
-  const { backendUrl } = useContext(AdminContext)
-  const { aToken } = useContext(AdminContext)
 
   const onSubmitHandler = async (event) => {
     event.preventDefault();
@@ -49,8 +44,7 @@ const AddDoctor = () => {
       formData.append('degree', degree);
       formData.append('address', JSON.stringify({ line1: address1, line2: address2 }));
 
-      const response = await axios.post(`${backendUrl}/api/admin/add-doctor`, formData, {
-        headers: { aToken}  })
+      const response = await api.post('/api/admin/add-doctor', formData)
       const data= response.data;
       if (data.success) {
                 toast.success(data.message)

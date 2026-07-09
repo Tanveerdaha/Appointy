@@ -2,12 +2,12 @@ import React, { useContext, useEffect, useState } from 'react'
 import { DoctorContext } from '../../context/DoctorContext'
 import { AppContext } from '../../context/AppContext'
 import { toast } from 'react-toastify'
-import axios from 'axios'
+import api from '../../api/client'
 import LoadingSpinner from '../../components/LoadingSpinner'
 
 const DoctorProfile = () => {
 
-    const { dToken, profileData, setProfileData, getProfileData, backendUrl } = useContext(DoctorContext)
+    const { dToken, profileData, setProfileData, getProfileData } = useContext(DoctorContext)
     const { currency} = useContext(AppContext)
     const [isEdit, setIsEdit] = useState(false)
 
@@ -22,7 +22,7 @@ const DoctorProfile = () => {
                 available: profileData.available
             }
 
-            const { data } = await axios.post(backendUrl + '/api/doctor/update-profile', updateData, { headers: { Authorization: `Bearer ${dToken}` } })
+            const { data } = await api.post('/api/doctor/update-profile', updateData)
 
             if (data.success) {
                 toast.success(data.message)

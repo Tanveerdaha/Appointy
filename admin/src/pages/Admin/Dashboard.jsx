@@ -42,7 +42,7 @@ const Dashboard = () => {
           </div>
         </div>
         <div className='flex items-center gap-2 bg-white p-4 min-w-52 rounded border-2 border-gray-100'>
-          <div className='w-14 h-14 flex items-center justify-center bg-green-50 rounded text-green-600 font-bold text-lg'>₹</div>
+          <div className='w-14 h-14 flex items-center justify-center bg-green-50 rounded text-green-600 font-bold text-lg'>Rs.</div>
           <div>
             <p className='text-xl font-semibold text-gray-600'>{currency}{dashData.revenue || 0}</p>
             <p className='text-gray-400'>Revenue ({dashData.paidAppointments || 0} paid)</p>

@@ -6,17 +6,19 @@ import { useNavigate, useLocation } from 'react-router-dom'
 
 const Navbar = ({ onMenuOpen }) => {
   const { setDToken } = useContext(DoctorContext)
-  const { aToken, setAToken } = useContext(AdminContext)
+  const { setAToken } = useContext(AdminContext)
   const navigate = useNavigate()
   const location = useLocation()
   const patientUrl = import.meta.env.VITE_PATIENT_URL || 'http://localhost:5173'
 
+  const isAdmin = !!(localStorage.getItem('aToken'))
+
   const logout = () => {
-    navigate('/')
-    setDToken('')
-    setAToken('')
     localStorage.removeItem('dToken')
     localStorage.removeItem('aToken')
+    setDToken('')
+    setAToken('')
+    navigate('/', { replace: true })
   }
 
   const isOnDashboard = location.pathname === '/admin-dashboard' || location.pathname === '/doctor-dashboard'
@@ -29,7 +31,7 @@ const Navbar = ({ onMenuOpen }) => {
         </button>
         <img onClick={() => navigate('/')} className='w-28 sm:w-36 cursor-pointer flex-shrink-0' src={assets.admin_logo} alt="Logo" />
         <p className='border px-2 py-0.5 rounded-full border-gray-500 text-gray-600 flex-shrink-0'>
-          {aToken ? 'Admin' : 'Doctor'}
+          {isAdmin ? 'Admin' : 'Doctor'}
         </p>
         {isOnDashboard && (
           <button onClick={() => window.open(patientUrl, '_blank')} className='hidden sm:block text-white bg-primary hover:bg-gray-700 px-3 py-1.5 rounded-full text-xs flex-shrink-0'>
@@ -37,7 +39,7 @@ const Navbar = ({ onMenuOpen }) => {
           </button>
         )}
       </div>
-      <button onClick={logout} className='bg-primary text-white text-xs sm:text-sm px-4 sm:px-8 py-2 rounded-full flex-shrink-0'>
+      <button type='button' onClick={logout} className='bg-primary text-white text-xs sm:text-sm px-4 sm:px-8 py-2 rounded-full flex-shrink-0 cursor-pointer'>
         Logout
       </button>
     </div>

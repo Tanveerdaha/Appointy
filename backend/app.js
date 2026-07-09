@@ -23,7 +23,8 @@ export const createApp = () => {
     app.use(express.json({ limit: '10mb' }))
     app.use(cors({
         origin: (origin, callback) => {
-            if (!origin || allowedOrigins.includes(origin)) {
+            const isLocalDev = origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+            if (!origin || allowedOrigins.includes(origin) || isLocalDev) {
                 callback(null, true)
             } else {
                 callback(new Error('Not allowed by CORS'))
