@@ -1,6 +1,6 @@
 import { useContext } from 'react'
 import { Navigate, Outlet } from 'react-router-dom'
-import { AdminContext } from '../context/AdminContext'
+import { AdminContext } from '../context/adminContext'
 
 const RequireAdmin = () => {
   const { aToken } = useContext(AdminContext)

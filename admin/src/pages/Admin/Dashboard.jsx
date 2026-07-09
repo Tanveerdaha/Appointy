@@ -1,7 +1,7 @@
 import React, { useContext, useEffect } from 'react'
 import { assets } from '../../assets/assets'
-import { AdminContext } from '../../context/AdminContext'
-import { AppContext } from '../../context/AppContext'
+import { AdminContext } from '../../context/adminContext'
+import { AppContext } from '../../context/appContext'
 import LoadingSpinner from '../../components/LoadingSpinner'
 import EmptyState from '../../components/EmptyState'
 
@@ -11,7 +11,7 @@ const Dashboard = () => {
 
   useEffect(() => {
     if (aToken) getDashData()
-  }, [aToken])
+  }, [aToken, getDashData])
 
   if (!dashData) return <LoadingSpinner label='Loading dashboard...' />
 

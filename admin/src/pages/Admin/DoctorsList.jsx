@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useState } from 'react'
-import { AdminContext } from '../../context/AdminContext'
-import { AppContext } from '../../context/AppContext'
+import { AdminContext } from '../../context/adminContext'
+import { AppContext } from '../../context/appContext'
 
 const DoctorsList = () => {
 
@@ -13,7 +13,7 @@ const DoctorsList = () => {
     if (aToken) {
         getAllDoctors()
     }
-}, [aToken])
+}, [aToken, getAllDoctors])
 
   const openEdit = (doctor) => {
     setEditDoctor(doctor)

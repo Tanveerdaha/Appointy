@@ -1,9 +1,7 @@
-import React, { useState } from 'react'
+import React, { useContext } from 'react'
 import { assets } from '../assets/assets'
 import { NavLink } from 'react-router-dom'
-import { DoctorContext } from '../context/DoctorContext'
-import { AdminContext } from '../context/AdminContext'
-import { useContext } from 'react'
+import { AdminContext } from '../context/adminContext'
 
 const adminLinks = [
   { to: '/admin-dashboard', icon: assets.home_icon, label: 'Dashboard' },
@@ -20,7 +18,6 @@ const doctorLinks = [
 ]
 
 const Sidebar = ({ mobileOpen, onClose }) => {
-  const { dToken } = useContext(DoctorContext)
   const { aToken } = useContext(AdminContext)
   const isAdmin = !!(aToken || localStorage.getItem('aToken'))
   const links = isAdmin ? adminLinks : doctorLinks

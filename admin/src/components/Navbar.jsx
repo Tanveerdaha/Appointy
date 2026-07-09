@@ -1,7 +1,7 @@
 import React, { useContext } from 'react'
 import { assets } from '../assets/assets'
-import { DoctorContext } from '../context/DoctorContext'
-import { AdminContext } from '../context/AdminContext'
+import { DoctorContext } from '../context/doctorContext'
+import { AdminContext } from '../context/adminContext'
 import { useNavigate, useLocation } from 'react-router-dom'
 
 const Navbar = ({ onMenuOpen }) => {

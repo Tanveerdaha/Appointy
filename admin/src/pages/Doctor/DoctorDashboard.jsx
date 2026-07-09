@@ -1,9 +1,9 @@
 import React from 'react'
 import { useContext } from 'react'
 import { useEffect } from 'react'
-import { DoctorContext } from '../../context/DoctorContext'
+import { DoctorContext } from '../../context/doctorContext'
 import { assets } from '../../assets/assets'
-import { AppContext } from '../../context/AppContext'
+import { AppContext } from '../../context/appContext'
 import LoadingSpinner from '../../components/LoadingSpinner'
 import EmptyState from '../../components/EmptyState'
 
@@ -13,7 +13,7 @@ const DoctorDashboard = () => {
 
   useEffect(() => {
     if (dToken) getDashData()
-  }, [dToken])
+  }, [dToken, getDashData])
 
   if (!dashData) return <LoadingSpinner label='Loading dashboard...' />
 

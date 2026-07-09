@@ -1,8 +1,7 @@
 import api, { apiBaseUrl } from '../api/client.js'
-import { createContext, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'react-toastify'
-
-export const DoctorContext = createContext()
+import { DoctorContext } from './doctorContext'
 
 const DoctorContextProvider = (props) => {
   const backendUrl = apiBaseUrl
@@ -20,7 +19,7 @@ const DoctorContextProvider = (props) => {
     return () => window.removeEventListener('auth:logout', onLogout)
   }, [])
 
-  const getAppointments = async () => {
+  const getAppointments = useCallback(async () => {
     try {
       const { data } = await api.get('/api/doctor/appointments')
 
@@ -33,9 +32,39 @@ const DoctorContextProvider = (props) => {
       console.error(error)
       toast.error(error.response?.data?.message || error.message)
     }
-  }
+  }, [])
 
-  const completeAppointment = async (appointmentId) => {
+  const getDashData = useCallback(async () => {
+    try {
+      const { data } = await api.get('/api/doctor/dashboard')
+
+      if (data.success) {
+        setDashData(data.dashData)
+      } else {
+        toast.error(data.message)
+      }
+    } catch (error) {
+      console.error(error)
+      toast.error(error.response?.data?.message || error.message)
+    }
+  }, [])
+
+  const getProfileData = useCallback(async () => {
+    try {
+      const { data } = await api.get('/api/doctor/profile')
+
+      if (data.success) {
+        setProfileData(data.profileData)
+      } else {
+        toast.error(data.message)
+      }
+    } catch (error) {
+      console.error(error)
+      toast.error(error.response?.data?.message || error.message)
+    }
+  }, [])
+
+  const completeAppointment = useCallback(async (appointmentId) => {
     try {
       const { data } = await api.post('/api/doctor/complete-appointment', { appointmentId })
 
@@ -50,9 +79,9 @@ const DoctorContextProvider = (props) => {
       console.error(error)
       toast.error(error.response?.data?.message || error.message)
     }
-  }
+  }, [getAppointments, getDashData])
 
-  const cancelAppointment = async (appointmentId) => {
+  const cancelAppointment = useCallback(async (appointmentId) => {
     try {
       const { data } = await api.post('/api/doctor/cancel-appointment', { appointmentId })
 
@@ -67,37 +96,7 @@ const DoctorContextProvider = (props) => {
       console.error(error)
       toast.error(error.response?.data?.message || error.message)
     }
-  }
-
-  const getDashData = async () => {
-    try {
-      const { data } = await api.get('/api/doctor/dashboard')
-
-      if (data.success) {
-        setDashData(data.dashData)
-      } else {
-        toast.error(data.message)
-      }
-    } catch (error) {
-      console.error(error)
-      toast.error(error.response?.data?.message || error.message)
-    }
-  }
-
-  const getProfileData = async () => {
-    try {
-      const { data } = await api.get('/api/doctor/profile')
-
-      if (data.success) {
-        setProfileData(data.profileData)
-      } else {
-        toast.error(data.message)
-      }
-    } catch (error) {
-      console.error(error)
-      toast.error(error.response?.data?.message || error.message)
-    }
-  }
+  }, [getAppointments, getDashData])
 
   const value = {
     dToken,

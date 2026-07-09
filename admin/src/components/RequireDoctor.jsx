@@ -1,6 +1,6 @@
 import { useContext } from 'react'
 import { Navigate, Outlet } from 'react-router-dom'
-import { DoctorContext } from '../context/DoctorContext'
+import { DoctorContext } from '../context/doctorContext'
 
 const RequireDoctor = () => {
   const { dToken } = useContext(DoctorContext)

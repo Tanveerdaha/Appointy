@@ -1,8 +1,8 @@
 import React, { useEffect } from 'react'
 import { assets } from '../../assets/assets'
 import { useContext } from 'react'
-import { AdminContext } from '../../context/AdminContext'
-import { AppContext } from '../../context/AppContext'
+import { AdminContext } from '../../context/adminContext'
+import { AppContext } from '../../context/appContext'
 import LoadingSpinner from '../../components/LoadingSpinner'
 import EmptyState from '../../components/EmptyState'
 
@@ -19,7 +19,7 @@ const AllAppointments = () => {
 
   useEffect(() => {
     if (aToken) getAllAppointments()
-  }, [aToken])
+  }, [aToken, getAllAppointments])
 
   if (!appointments) return <LoadingSpinner label='Loading appointments...' />
 

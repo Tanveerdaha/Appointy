@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useState } from 'react'
-import { DoctorContext } from '../../context/DoctorContext'
-import { AppContext } from '../../context/AppContext'
+import { DoctorContext } from '../../context/doctorContext'
+import { AppContext } from '../../context/appContext'
 import { toast } from 'react-toastify'
 import api from '../../api/client'
 import LoadingSpinner from '../../components/LoadingSpinner'
@@ -43,7 +43,7 @@ const DoctorProfile = () => {
         if (dToken) {
             getProfileData()
         }
-    }, [dToken])
+    }, [dToken, getProfileData])
 
     return profileData ? (
         <div>

@@ -1,7 +1,7 @@
 import { useContext } from 'react'
 import { Navigate, Outlet } from 'react-router-dom'
-import { AdminContext } from '../context/AdminContext'
-import { DoctorContext } from '../context/DoctorContext'
+import { AdminContext } from '../context/adminContext'
+import { DoctorContext } from '../context/doctorContext'
 
 const GuestOnly = () => {
   const { aToken } = useContext(AdminContext)

@@ -1,5 +1,5 @@
 import React, { useContext, useEffect } from 'react'
-import { AdminContext } from '../../context/AdminContext'
+import { AdminContext } from '../../context/adminContext'
 import LoadingSpinner from '../../components/LoadingSpinner'
 import EmptyState from '../../components/EmptyState'
 
@@ -8,7 +8,7 @@ const PatientsList = () => {
 
   useEffect(() => {
     if (aToken) getPatients()
-  }, [aToken])
+  }, [aToken, getPatients])
 
   if (patients === null) return <LoadingSpinner label='Loading patients...' />
 

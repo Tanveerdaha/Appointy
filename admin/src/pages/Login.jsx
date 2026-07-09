@@ -2,8 +2,8 @@ import api, { apiBaseUrl } from '../api/client'
 import React, { useContext, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
-import { DoctorContext } from '../context/DoctorContext'
-import { AdminContext } from '../context/AdminContext'
+import { DoctorContext } from '../context/doctorContext'
+import { AdminContext } from '../context/adminContext'
 import { toast } from 'react-toastify'
 
 const Login = () => {

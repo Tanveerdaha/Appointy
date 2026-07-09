@@ -1,7 +1,7 @@
 import React from 'react'
 import { useContext, useEffect } from 'react'
-import { DoctorContext } from '../../context/DoctorContext'
-import { AppContext } from '../../context/AppContext'
+import { DoctorContext } from '../../context/doctorContext'
+import { AppContext } from '../../context/appContext'
 import { assets } from '../../assets/assets'
 
 const DoctorAppointments = () => {
@@ -13,7 +13,7 @@ const DoctorAppointments = () => {
     if (dToken) {
       getAppointments()
     }
-  }, [dToken])
+  }, [dToken, getAppointments])
 
   return (
     <div className='w-full max-w-6xl m-5 '>
