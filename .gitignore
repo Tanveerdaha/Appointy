@@ -1,8 +1,11 @@
 # environment files
 .env
 frontend/.env
+frontend/.env.example
 backend/.env
+backend/.env.example
 admin/.env
+admin/.env.example
 
 # dependencies
 node_modules/
