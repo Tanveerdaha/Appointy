@@ -8,7 +8,7 @@ const Privacy = () => {
         Appointy respects your privacy. We collect only the information needed to provide appointment booking services, including your name, email, contact details, and appointment history.
       </p>
       <p className="text-gray-600 leading-7 mb-4">
-        Your data is used solely to manage bookings, payments, and account access. We do not sell personal information to third parties. Payment processing is handled securely through Razorpay.
+        Your data is used solely to manage bookings, payments, and account access. We do not sell personal information to third parties. Payment processing is handled securely through Stripe.
       </p>
       <p className="text-gray-600 leading-7">
         For questions about this policy, contact us at customersupport@appointy.in.

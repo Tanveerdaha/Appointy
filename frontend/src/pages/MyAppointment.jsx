@@ -1,20 +1,20 @@
 import React, { useCallback, useContext, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppContext } from '../context/appContext'
 import axios from 'axios'
 import { toast } from 'react-toastify'
-import { assets } from '../assets/assets'
 import RescheduleModal from '../components/RescheduleModal'
 import LoadingSpinner from '../components/LoadingSpinner'
 import EmptyState from '../components/EmptyState'
-import { openRazorpayCheckout, verifyPayment, getPaymentStatus } from '../utils/razorpay'
+import { redirectToStripeCheckout, verifyStripePayment, getPaymentStatus } from '../utils/stripe'
 
 const MyAppointments = () => {
   const { backendUrl, token, getDoctorsData, doctors } = useContext(AppContext)
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [appointments, setAppointments] = useState([])
   const [loading, setLoading] = useState(true)
-  const [payment, setPayment] = useState('')
+  const [payingId, setPayingId] = useState('')
   const [rescheduleTarget, setRescheduleTarget] = useState(null)
 
   const months = [' ', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -60,33 +60,23 @@ const MyAppointments = () => {
     }
   }
 
-  const appointmentRazorpay = async (appointmentId) => {
+  const appointmentStripe = async (appointmentId) => {
     try {
+      setPayingId(appointmentId)
       const { data } = await axios.post(
-        `${backendUrl}/api/user/payment-razorpay`,
+        `${backendUrl}/api/user/payment-stripe`,
         { appointmentId },
         { headers: { token, Authorization: `Bearer ${token}` } }
       )
-      if (data.success) {
-        openRazorpayCheckout({
-          order: data.order,
-          key: import.meta.env.VITE_RAZORPAY_KEY_ID,
-          onSuccess: async (response) => {
-            const result = await verifyPayment(backendUrl, token, response)
-            if (result.success) {
-              toast.success(result.message)
-              getUserAppointments()
-            } else {
-              toast.error(result.message)
-            }
-          },
-          onError: () => toast.error('Payment failed'),
-        })
+      if (data.success && data.sessionUrl) {
+        redirectToStripeCheckout(data.sessionUrl)
       } else {
-        toast.error(data.message)
+        toast.error(data.message || 'Unable to start Stripe checkout')
+        setPayingId('')
       }
     } catch (error) {
       toast.error(error.response?.data?.message || error.message)
+      setPayingId('')
     }
   }
 
@@ -113,6 +103,39 @@ const MyAppointments = () => {
   useEffect(() => {
     if (token) getUserAppointments()
   }, [token, getUserAppointments])
+
+  useEffect(() => {
+    const sessionId = searchParams.get('session_id')
+    const canceled = searchParams.get('canceled')
+
+    if (!token) return
+
+    if (canceled) {
+      toast.info('Payment cancelled')
+      setSearchParams({})
+      return
+    }
+
+    if (!sessionId) return
+
+    const confirmPayment = async () => {
+      try {
+        const result = await verifyStripePayment(backendUrl, token, sessionId)
+        if (result.success) {
+          toast.success(result.message)
+          getUserAppointments()
+        } else {
+          toast.error(result.message)
+        }
+      } catch (error) {
+        toast.error(error.response?.data?.message || error.message)
+      } finally {
+        setSearchParams({})
+      }
+    }
+
+    confirmPayment()
+  }, [token, backendUrl, searchParams, setSearchParams, getUserAppointments])
 
   if (loading) return <LoadingSpinner label='Loading appointments...' />
 
@@ -153,14 +176,13 @@ const MyAppointments = () => {
                 </div>
                 <div />
                 <div className='flex flex-col gap-2 justify-end text-sm text-center'>
-                  {!item.cancelled && status !== 'paid' && !item.isCompleted && payment !== apptId && (
-                    <button onClick={() => setPayment(apptId)} className='text-[#696969] sm:min-w-48 py-2 border rounded hover:bg-primary hover:text-white transition-all duration-300'>
-                      Pay Online
-                    </button>
-                  )}
-                  {!item.cancelled && status !== 'paid' && !item.isCompleted && payment === apptId && (
-                    <button onClick={() => appointmentRazorpay(apptId)} className='text-[#696969] sm:min-w-48 py-2 border rounded hover:bg-gray-100 transition-all duration-300 flex items-center justify-center'>
-                      <img className='max-w-20 max-h-5' src={assets.razorpay_logo} alt="Razorpay" />
+                  {!item.cancelled && status !== 'paid' && !item.isCompleted && (
+                    <button
+                      onClick={() => appointmentStripe(apptId)}
+                      disabled={payingId === apptId}
+                      className='text-[#696969] sm:min-w-48 py-2 border rounded hover:bg-primary hover:text-white transition-all duration-300 disabled:opacity-60'
+                    >
+                      {payingId === apptId ? 'Redirecting...' : 'Pay with Stripe'}
                     </button>
                   )}
                   {!item.cancelled && status === 'paid' && !item.isCompleted && (

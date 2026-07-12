@@ -1,7 +1,7 @@
 import express from 'express';
 import {
     registerUser, loginUser, getProfile, updateProfile, bookAppointment,
-    listAppointment, cancelAppointment, paymentRazorpay, verifyRazorpay,
+    listAppointment, cancelAppointment, paymentStripe, verifyStripe,
     rescheduleAppointment, forgotPassword, resetPassword, contactUs,
 } from '../controllers/userController.js';
 import authUser from '../middlewares/authUser.js';
@@ -19,8 +19,8 @@ userRouter.post("/update-profile", authUser, upload.single('image'), updateProfi
 userRouter.post("/book-appointment", authUser, bookAppointment)
 userRouter.get("/appointments", authUser, listAppointment)
 userRouter.post("/cancel-appointment", authUser, cancelAppointment)
-userRouter.post("/payment-razorpay", authUser, paymentRazorpay)
-userRouter.post("/verifyRazorpay", authUser, verifyRazorpay)
+userRouter.post("/payment-stripe", authUser, paymentStripe)
+userRouter.post("/verify-stripe", authUser, verifyStripe)
 userRouter.post("/reschedule-appointment", authUser, rescheduleAppointment)
 
 export default userRouter;

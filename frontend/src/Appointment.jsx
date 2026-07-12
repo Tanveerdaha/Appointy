@@ -8,7 +8,7 @@ import EmptyState from './components/EmptyState'
 import useAvailableSlots from './hooks/useAvailableSlots'
 import axios from 'axios'
 import { toast } from 'react-toastify'
-import { openRazorpayCheckout, verifyPayment } from './utils/razorpay'
+import { redirectToStripeCheckout } from './utils/stripe'
 
 const Appointment = () => {
   const { docId } = useParams()
@@ -36,31 +36,12 @@ const Appointment = () => {
     }
   }, [doctors, docId])
 
-  const handlePayment = async (order) => {
-    const key = import.meta.env.VITE_RAZORPAY_KEY_ID
-    if (!key) {
-      toast.error('Razorpay key not configured')
-      return
+  const handlePayment = (sessionUrl) => {
+    try {
+      redirectToStripeCheckout(sessionUrl)
+    } catch (error) {
+      toast.error(error.message || 'Unable to start Stripe checkout')
     }
-    openRazorpayCheckout({
-      order,
-      key,
-      onSuccess: async (response) => {
-        try {
-          const data = await verifyPayment(backendUrl, token, response)
-          if (data.success) {
-            toast.success(data.message)
-            getDoctorsData()
-            navigate('/my-appointments')
-          } else {
-            toast.error(data.message)
-          }
-        } catch (error) {
-          toast.error(error.message)
-        }
-      },
-      onError: () => toast.error('Payment failed'),
-    })
   }
 
   const bookAppointment = async () => {
@@ -98,9 +79,10 @@ const Appointment = () => {
 
       if (data.success) {
         toast.success(data.message)
-        if (payMode === 'now' && data.order) {
-          await handlePayment(data.order)
+        if (payMode === 'now' && data.sessionUrl) {
+          handlePayment(data.sessionUrl)
         } else {
+          if (data.paymentWarning) toast.warning(data.paymentWarning)
           getDoctorsData()
           navigate('/my-appointments')
         }

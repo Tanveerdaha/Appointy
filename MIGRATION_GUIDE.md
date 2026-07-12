@@ -82,10 +82,9 @@ CLOUDINARY_API_SECRET=your_cloudinary_api_secret
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=admin123
 
-# Razorpay Configuration
-RAZORPAY_KEY_ID=your_razorpay_key_id
-RAZORPAY_KEY_SECRET=your_razorpay_key_secret
-CURRENCY=INR
+# Stripe Configuration
+STRIPE_SECRET_KEY=sk_test_your_stripe_secret_key
+CURRENCY=pkr
 ```
 
 ### Step 5: Start the Server

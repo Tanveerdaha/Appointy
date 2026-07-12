@@ -5,7 +5,7 @@ import User from "../models/userModel.js";
 import Doctor from "../models/doctorModel.js";
 import Appointment from "../models/appointmentModel.js";
 import jwt from "jsonwebtoken";
-import razorpay from 'razorpay';
+import Stripe from 'stripe';
 import { uploadImage } from '../utils/uploadImage.js';
 import sequelize from '../config/mysql.js';
 import { lockDoctorForUpdate } from '../utils/lockDoctor.js';
@@ -13,24 +13,40 @@ import { notifyAppointmentBooked, notifyAppointmentCancelled, notifyPasswordRese
 
 const JWT_OPTIONS = { expiresIn: '7d' }
 
-const getRazorpayInstance = () => {
-    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-        throw new Error('Razorpay credentials not configured')
+const getStripe = () => {
+    if (!process.env.STRIPE_SECRET_KEY) {
+        throw new Error('Stripe credentials not configured')
     }
-    return new razorpay({
-        key_id: process.env.RAZORPAY_KEY_ID,
-        key_secret: process.env.RAZORPAY_KEY_SECRET
-    })
+    return new Stripe(process.env.STRIPE_SECRET_KEY)
 }
 
-const createRazorpayOrder = async (appointment) => {
-    const razorpayInstance = getRazorpayInstance()
-    const options = {
-        amount: appointment.amount * 100,
-        currency: process.env.CURRENCY || 'INR',
-        receipt: appointment.id,
-    }
-    return razorpayInstance.orders.create(options)
+const createStripeCheckoutSession = async (appointment, userId) => {
+    const stripe = getStripe()
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '')
+    const currency = (process.env.CURRENCY || 'pkr').toLowerCase()
+    const amount = Math.round(Number(appointment.amount) * 100)
+
+    return stripe.checkout.sessions.create({
+        mode: 'payment',
+        payment_method_types: ['card'],
+        line_items: [{
+            quantity: 1,
+            price_data: {
+                currency,
+                unit_amount: amount,
+                product_data: {
+                    name: 'Doctor Appointment',
+                    description: `Appointment #${appointment.id}`,
+                },
+            },
+        }],
+        metadata: {
+            appointmentId: String(appointment.id),
+            userId: String(userId),
+        },
+        success_url: `${frontendUrl}/my-appointments?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${frontendUrl}/my-appointments?canceled=1`,
+    })
 }
 
 const syncPaymentFields = (appointment) => {
@@ -223,8 +239,10 @@ const bookAppointment = async (req, res) => {
 
         if (payMode === 'now') {
             try {
-                const order = await createRazorpayOrder(appointment)
-                response.order = order
+                const session = await createStripeCheckoutSession(appointment, userId)
+                await Appointment.update({ paymentStatus: 'pending' }, { where: { id: appointment.id } })
+                response.sessionUrl = session.url
+                response.sessionId = session.id
             } catch (err) {
                 response.paymentWarning = err.message
             }
@@ -302,7 +320,7 @@ const listAppointment = async (req, res) => {
     }
 }
 
-const paymentRazorpay = async (req, res) => {
+const paymentStripe = async (req, res) => {
     try {
         const userId = req.userId
         const { appointmentId } = req.body
@@ -321,10 +339,10 @@ const paymentRazorpay = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Appointment already paid' })
         }
 
-        const order = await createRazorpayOrder(appointmentData)
+        const session = await createStripeCheckoutSession(appointmentData, userId)
         await Appointment.update({ paymentStatus: 'pending' }, { where: { id: appointmentId } })
 
-        res.json({ success: true, order })
+        res.json({ success: true, sessionUrl: session.url, sessionId: session.id })
 
     } catch (error) {
         console.log(error)
@@ -332,32 +350,32 @@ const paymentRazorpay = async (req, res) => {
     }
 }
 
-const verifyRazorpay = async (req, res) => {
+const verifyStripe = async (req, res) => {
     try {
         const userId = req.userId
-        const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body
+        const { sessionId } = req.body
 
-        if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
-            return res.status(400).json({ success: false, message: 'Invalid payment response' })
+        if (!sessionId) {
+            return res.status(400).json({ success: false, message: 'Missing Stripe session id' })
         }
 
-        const sign = crypto
-            .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-            .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-            .digest('hex')
+        const stripe = getStripe()
+        const session = await stripe.checkout.sessions.retrieve(sessionId)
 
-        if (sign !== razorpay_signature) {
-            return res.status(400).json({ success: false, message: 'Invalid payment signature' })
-        }
-
-        const razorpayInstance = getRazorpayInstance()
-        const orderInfo = await razorpayInstance.orders.fetch(razorpay_order_id)
-
-        if (orderInfo.status !== 'paid') {
+        if (session.payment_status !== 'paid') {
             return res.status(400).json({ success: false, message: 'Payment Failed' })
         }
 
-        const appointment = await Appointment.findByPk(orderInfo.receipt)
+        const appointmentId = session.metadata?.appointmentId
+        if (!appointmentId) {
+            return res.status(400).json({ success: false, message: 'Invalid payment session' })
+        }
+
+        if (session.metadata?.userId && String(session.metadata.userId) !== String(userId)) {
+            return res.status(403).json({ success: false, message: 'Unauthorized action' })
+        }
+
+        const appointment = await Appointment.findByPk(appointmentId)
 
         if (!appointment || appointment.cancelled) {
             return res.status(404).json({ success: false, message: 'Appointment not found or cancelled' })
@@ -369,9 +387,9 @@ const verifyRazorpay = async (req, res) => {
 
         await Appointment.update(
             { payment: true, paymentStatus: 'paid' },
-            { where: { id: orderInfo.receipt } }
+            { where: { id: appointmentId } }
         )
-        res.json({ success: true, message: "Payment Successful" })
+        res.json({ success: true, message: 'Payment Successful' })
     } catch (error) {
         console.log(error)
         res.status(500).json({ success: false, message: error.message })
@@ -523,6 +541,6 @@ const contactUs = async (req, res) => {
 
 export {
     registerUser, loginUser, getProfile, updateProfile, bookAppointment,
-    listAppointment, cancelAppointment, paymentRazorpay, verifyRazorpay,
+    listAppointment, cancelAppointment, paymentStripe, verifyStripe,
     rescheduleAppointment, forgotPassword, resetPassword, contactUs,
 }

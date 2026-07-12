@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getPaymentStatus } from './razorpay'
+import { getPaymentStatus } from './stripe'
 
 describe('getPaymentStatus', () => {
   it('returns paid when paymentStatus is paid', () => {

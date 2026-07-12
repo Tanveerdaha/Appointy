@@ -1,6 +1,6 @@
 # Appointy - Doctor Appointment Web App
 
-**Appointy** is a full-stack web application for booking doctor appointments. It supports three roles — **Patient**, **Doctor**, and **Admin** — with Razorpay online payments. Built with **React + Node/Express + Sequelize (SQLite/MySQL)**.
+**Appointy** is a full-stack web application for booking doctor appointments. It supports three roles — **Patient**, **Doctor**, and **Admin** — with Stripe online payments. Built with **React + Node/Express + Sequelize (SQLite/MySQL)**.
 
 ## Tech Stack
 
@@ -8,7 +8,7 @@
 - **Admin/Doctor panel**: React, Vite — `admin/` (port 5174)
 - **Backend API**: Node.js, Express, Sequelize — `backend/` (port 4000)
 - **Database**: SQLite (default local dev) or MySQL via `DB_DIALECT=mysql`
-- **Payments**: Razorpay
+- **Payments**: Stripe Checkout
 - **Auth**: JWT (7-day expiry)
 
 ## Key Features
@@ -16,7 +16,7 @@
 ### Patient
 - Browse and search doctors by specialty
 - Book, cancel, and reschedule appointments
-- Pay online via Razorpay
+- Pay online via Stripe
 - Manage profile (name, phone, address, gender, DOB, image)
 
 ### Doctor
@@ -53,9 +53,9 @@ PORT=4000
 JWT_SECRET=your_jwt_secret
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=your_secure_password
-RAZORPAY_KEY_ID=your_razorpay_key_id
-RAZORPAY_KEY_SECRET=your_razorpay_key_secret
-CURRENCY=INR
+STRIPE_SECRET_KEY=sk_test_your_stripe_secret_key
+CURRENCY=pkr
+FRONTEND_URL=http://localhost:5173
 ```
 
 For MySQL production, set `DB_DIALECT=mysql` and configure `MYSQL_*` variables.
@@ -64,14 +64,13 @@ For MySQL production, set `DB_DIALECT=mysql` and configure `MYSQL_*` variables.
 
 ```env
 VITE_BACKEND_URL=http://localhost:4000
-VITE_RAZORPAY_KEY_ID=your_razorpay_key_id
 VITE_ADMIN_URL=http://localhost:5174
 ```
 
 **Admin** — copy `admin/.env.example` to `admin/.env`:
 
 ```env
-VITE_BACKEND_URL=http://localhost:4000
+VITE_BACKEND_URL=
 VITE_CURRENCY=INR
 ```
 
@@ -113,8 +112,8 @@ Appointy/
 
 ## Payment Integration
 
-- **Razorpay** is the supported online payment gateway
-- Payments are verified server-side with HMAC signature validation
+- **Stripe Checkout** is the supported online payment gateway
+- After payment, the patient returns to My Appointments and the backend verifies the Stripe session before marking the appointment as paid
 
 ## Production Notes
 
