@@ -1,14 +1,12 @@
 import React, { useContext, useState } from 'react'
 import { assets } from '../assets/assets'
-import { NavLink, useNavigate, useLocation } from 'react-router-dom'
+import { NavLink, useNavigate } from 'react-router-dom'
 import { AppContext } from '../context/appContext'
 
 const Navbar = () => {
   const navigate = useNavigate()
-  const location = useLocation()
   const [showMenu, setShowMenu] = useState(false)
   const { token, setToken, userData } = useContext(AppContext)
-  const adminUrl = import.meta.env.VITE_ADMIN_URL || 'http://localhost:5174'
 
   const logout = () => {
     localStorage.removeItem('token')
@@ -37,12 +35,6 @@ const Navbar = () => {
       </ul>
 
       <div className='flex items-center gap-4'>
-        {location.pathname === '/' && (
-          <button onClick={() => window.open(adminUrl, '_blank')} className='bg-primary text-white text-xs px-4 py-2 rounded-full hover:bg-gray-700 hidden md:block'>
-            Admin Panel
-          </button>
-        )}
-
         {token && userData ? (
           <div className='flex items-center gap-2 cursor-pointer group relative'>
             <img className='w-12 h-12 rounded-full object-cover' src={userData.image || assets.profile_pic} alt="profile" />

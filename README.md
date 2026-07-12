@@ -64,7 +64,6 @@ For MySQL production, set `DB_DIALECT=mysql` and configure `MYSQL_*` variables.
 
 ```env
 VITE_BACKEND_URL=http://localhost:4000
-VITE_ADMIN_URL=http://localhost:5174
 ```
 
 **Admin** — copy `admin/.env.example` to `admin/.env`:
