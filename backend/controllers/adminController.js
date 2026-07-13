@@ -7,6 +7,7 @@ import { uploadImage } from "../utils/uploadImage.js";
 import User from "../models/userModel.js"
 import { verifyAdminPassword } from "../middlewares/authAdmin.js";
 import { notifyAppointmentCancelled } from "../services/notificationService.js";
+import { cancelAppointmentAndReleaseSlot } from "../utils/appointmentSlots.js";
 
 // API for admin login
 const loginAdmin = async (req, res) => {
@@ -44,10 +45,14 @@ const addDoctor = async (req, res) => {
       return res.status(400).json({ success: false, message: "Please enter a strong password" });
     }
 
+    if (!imageFile) {
+      return res.status(400).json({ success: false, message: "Doctor image is required" });
+    }
+
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    const imageUrl = imageFile ? await uploadImage(imageFile) : '';
+    const imageUrl = await uploadImage(imageFile);
 
     let parsedAddress;
     try {
@@ -87,25 +92,14 @@ const appointmentCancel = async (req, res) => {
         const appointmentData = await Appointment.findByPk(appointmentId)
 
         if (!appointmentData) {
-            return res.json({ success: false, message: 'Appointment not found' })
+            return res.status(404).json({ success: false, message: 'Appointment not found' })
         }
 
-        await Appointment.update({ cancelled: true }, { where: { id: appointmentId } })
-
-        // releasing doctor slot 
-        const { docId, slotDate, slotTime } = appointmentData
-
-        const doctorData = await Doctor.findByPk(docId)
-
-        if (doctorData) {
-            let slots_booked = doctorData.slots_booked || {}
-
-            if (slots_booked[slotDate]) {
-                slots_booked[slotDate] = slots_booked[slotDate].filter(e => e !== slotTime)
-            }
-
-            await Doctor.update({ slots_booked }, { where: { id: docId } })
+        if (appointmentData.cancelled) {
+            return res.status(400).json({ success: false, message: 'Appointment already cancelled' })
         }
+
+        await cancelAppointmentAndReleaseSlot(appointmentData)
 
         notifyAppointmentCancelled(appointmentData, appointmentData.userData?.email).catch(console.error)
 
@@ -113,15 +107,13 @@ const appointmentCancel = async (req, res) => {
 
     } catch (error) {
         console.log(error)
-        res.json({ success: false, message: error.message })
+        res.status(500).json({ success: false, message: error.message })
     }
 }
 
 const allDoctors = async (req, res) => {
     try {
-        const doctors = await Doctor.findAll({
-            attributes: { exclude: ['password'] }
-        })
+        const doctors = await Doctor.findAll()
         res.json({ success: true, doctors })
 
     } catch (error) {
@@ -145,23 +137,29 @@ const appointmentsAdmin = async (req, res) => {
 // API to get dashboard data for admin panel
 const adminDashboard = async (req, res) => {
     try {
-        const doctors = await Doctor.findAll()
-        const users = await User.findAll()
-        const appointments = await Appointment.findAll()
-
-        const paidAppointments = appointments.filter(a => {
-            const status = a.paymentStatus || (a.payment ? 'paid' : 'unpaid')
-            return status === 'paid' && !a.cancelled
-        })
-        const revenue = paidAppointments.reduce((sum, a) => sum + (a.amount || 0), 0)
+        const [doctors, patients, appointments, revenue, paidAppointments, latestAppointments] = await Promise.all([
+            Doctor.count(),
+            User.count(),
+            Appointment.count(),
+            Appointment.sum('amount', {
+                where: { cancelled: false, paymentStatus: 'paid' },
+            }),
+            Appointment.count({
+                where: { cancelled: false, paymentStatus: 'paid' },
+            }),
+            Appointment.findAll({
+                order: [['createdAt', 'DESC']],
+                limit: 5,
+            }),
+        ])
 
         const dashData = {
-            doctors: doctors.length,
-            appointments: appointments.length,
-            patients: users.length,
-            revenue,
-            paidAppointments: paidAppointments.length,
-            latestAppointments: [...appointments].reverse().slice(0, 5)
+            doctors,
+            appointments,
+            patients,
+            revenue: revenue || 0,
+            paidAppointments,
+            latestAppointments,
         }
 
         res.json({ success: true, dashData })

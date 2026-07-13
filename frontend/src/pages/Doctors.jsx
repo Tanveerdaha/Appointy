@@ -11,7 +11,7 @@ const Doctors = () => {
   const [showFilter, setShowFilter] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const navigate = useNavigate()
-  const { doctors } = useContext(AppContext)
+  const { doctors, doctorsLoaded } = useContext(AppContext)
 
   useEffect(() => {
     let filtered = doctors
@@ -28,7 +28,7 @@ const Doctors = () => {
     setFilterDoc(filtered)
   }, [doctors, speciality, searchQuery])
 
-  if (!doctors.length) return <LoadingSpinner label='Loading doctors...' />
+  if (!doctorsLoaded) return <LoadingSpinner label='Loading doctors...' />
 
   return (
     <div>

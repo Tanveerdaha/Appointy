@@ -1,8 +1,9 @@
 import { AppContext } from './appContext'
 
+const currencyCode = (import.meta.env.VITE_CURRENCY || 'PKR').toUpperCase()
+const currency = ['PKR', 'INR'].includes(currencyCode) ? 'Rs.' : currencyCode
+
 const AppContextProvider = (props) => {
-  const currency = import.meta.env.VITE_CURRENCY === 'INR' ? 'Rs.' : (import.meta.env.VITE_CURRENCY || 'Rs.')
-  const backendUrl = import.meta.env.VITE_BACKEND_URL
   const months = [' ', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
   const getId = (item) => item?.id ?? item?._id
@@ -21,7 +22,10 @@ const AppContextProvider = (props) => {
   }
 
   const value = {
-    calculateAge, slotDateFormat, currency, getId, backendUrl,
+    calculateAge,
+    slotDateFormat,
+    currency,
+    getId,
   }
 
   return (

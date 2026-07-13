@@ -9,6 +9,7 @@ import Stripe from 'stripe';
 import { uploadImage } from '../utils/uploadImage.js';
 import sequelize from '../config/mysql.js';
 import { lockDoctorForUpdate } from '../utils/lockDoctor.js';
+import { cancelAppointmentAndReleaseSlot, toSafeDoctorSnapshot } from '../utils/appointmentSlots.js';
 import { notifyAppointmentBooked, notifyAppointmentCancelled, notifyPasswordReset } from '../services/notificationService.js';
 
 const JWT_OPTIONS = { expiresIn: '7d' }
@@ -90,7 +91,7 @@ const registerUser = async (req, res) => {
 const loginUser = async (req, res) => {
     try {
         const { email, password } = req.body;
-        const user = await User.findOne({ where: { email } })
+        const user = await User.unscoped().findOne({ where: { email } })
 
         if (!user) {
             return res.status(404).json({ success: false, message: "User does not exist" })
@@ -209,13 +210,15 @@ const bookAppointment = async (req, res) => {
             transaction
         })
 
+        const safeDocData = toSafeDoctorSnapshot(docData)
+
         const paymentStatus = payMode === 'now' ? 'pending' : 'unpaid'
 
         const appointment = await Appointment.create({
             userId,
             docId,
             userData: userData.toJSON(),
-            docData: docData.toJSON(),
+            docData: safeDocData,
             amount: docData.fees,
             slotTime,
             slotDate,
@@ -280,18 +283,9 @@ const cancelAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Appointment already cancelled' })
         }
 
-        await Appointment.update({ cancelled: true, paymentStatus: 'unpaid' }, { where: { id: appointmentId } })
-
-        const { docId, slotDate, slotTime } = appointmentData
-        const doctorData = await Doctor.findByPk(docId)
-
-        if (doctorData) {
-            let slots_booked = doctorData.slots_booked || {}
-            if (slots_booked[slotDate]) {
-                slots_booked[slotDate] = slots_booked[slotDate].filter(e => e !== slotTime)
-            }
-            await Doctor.update({ slots_booked }, { where: { id: docId } })
-        }
+        await cancelAppointmentAndReleaseSlot(appointmentData, {
+            extraAppointmentFields: { paymentStatus: 'unpaid' },
+        })
 
         const user = await User.findByPk(userId)
         notifyAppointmentCancelled(appointmentData, user?.email).catch(console.error)
@@ -472,7 +466,7 @@ const forgotPassword = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Valid email required' })
         }
 
-        const user = await User.findOne({ where: { email } })
+        const user = await User.unscoped().findOne({ where: { email } })
         if (!user) {
             return res.json({ success: true, message: 'If that email exists, a reset link has been sent.' })
         }
@@ -480,7 +474,7 @@ const forgotPassword = async (req, res) => {
         const resetToken = crypto.randomBytes(32).toString('hex')
         const resetTokenExpiry = Date.now() + 3600000
 
-        await User.update({ resetToken, resetTokenExpiry }, { where: { id: user.id } })
+        await User.unscoped().update({ resetToken, resetTokenExpiry }, { where: { id: user.id } })
 
         const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173'
         const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}&email=${encodeURIComponent(email)}`
@@ -503,7 +497,7 @@ const resetPassword = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' })
         }
 
-        const user = await User.findOne({ where: { email, resetToken: token } })
+        const user = await User.unscoped().findOne({ where: { email, resetToken: token } })
         if (!user || !user.resetTokenExpiry || user.resetTokenExpiry < Date.now()) {
             return res.status(400).json({ success: false, message: 'Invalid or expired reset token' })
         }
@@ -511,7 +505,7 @@ const resetPassword = async (req, res) => {
         const salt = await bcrypt.genSalt(10)
         const hashedPassword = await bcrypt.hash(password, salt)
 
-        await User.update(
+        await User.unscoped().update(
             { password: hashedPassword, resetToken: null, resetTokenExpiry: null },
             { where: { id: user.id } }
         )

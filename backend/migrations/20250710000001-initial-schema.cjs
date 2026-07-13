@@ -7,9 +7,9 @@ module.exports = {
       id: { type: Sequelize.UUID, defaultValue: Sequelize.UUIDV4, primaryKey: true },
       name: { type: Sequelize.STRING, allowNull: false },
       email: { type: Sequelize.STRING, allowNull: false, unique: true },
-      image: { type: Sequelize.TEXT, defaultValue: '' },
+      image: { type: Sequelize.STRING(2048), allowNull: false, defaultValue: '' },
       phone: { type: Sequelize.STRING, defaultValue: '000000000' },
-      address: { type: Sequelize.JSON, defaultValue: { line1: '', line2: '' } },
+      address: { type: Sequelize.JSON, allowNull: true },
       gender: { type: Sequelize.STRING, defaultValue: 'Not Selected' },
       dob: { type: Sequelize.STRING, defaultValue: 'Not Selected' },
       password: { type: Sequelize.STRING, allowNull: false },
@@ -23,14 +23,14 @@ module.exports = {
       id: { type: Sequelize.UUID, defaultValue: Sequelize.UUIDV4, primaryKey: true },
       name: { type: Sequelize.STRING, allowNull: false },
       email: { type: Sequelize.STRING, allowNull: false, unique: true },
-      image: { type: Sequelize.TEXT, allowNull: false },
+      image: { type: Sequelize.STRING(2048), allowNull: false },
       speciality: { type: Sequelize.STRING, allowNull: false },
       degree: { type: Sequelize.STRING, allowNull: false },
       experience: { type: Sequelize.STRING, allowNull: false },
       about: { type: Sequelize.TEXT, allowNull: false },
       available: { type: Sequelize.BOOLEAN, defaultValue: true },
       fees: { type: Sequelize.INTEGER, allowNull: false },
-      slots_booked: { type: Sequelize.JSON, defaultValue: {} },
+      slots_booked: { type: Sequelize.JSON, allowNull: true },
       address: { type: Sequelize.JSON, allowNull: false },
       password: { type: Sequelize.STRING, allowNull: false },
       date: { type: Sequelize.BIGINT, allowNull: false },
@@ -55,6 +55,10 @@ module.exports = {
       createdAt: { type: Sequelize.DATE, allowNull: false },
       updatedAt: { type: Sequelize.DATE, allowNull: false },
     });
+
+    await queryInterface.addIndex('appointments', ['userId']);
+    await queryInterface.addIndex('appointments', ['docId']);
+    await queryInterface.addIndex('appointments', ['paymentStatus']);
   },
 
   async down(queryInterface) {

@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Link, useSearchParams, useNavigate } from 'react-router-dom'
-import axios from 'axios'
+import api from '../api/client'
 import { toast } from 'react-toastify'
 
 const ResetPassword = () => {
@@ -10,13 +10,12 @@ const ResetPassword = () => {
   const [loading, setLoading] = useState(false)
   const email = searchParams.get('email') || ''
   const token = searchParams.get('token') || ''
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000'
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
     try {
-      const { data } = await axios.post(`${backendUrl}/api/user/reset-password`, { email, token, password })
+      const { data } = await api.post('/api/user/reset-password', { email, token, password })
       if (data.success) {
         toast.success(data.message)
         navigate('/login')

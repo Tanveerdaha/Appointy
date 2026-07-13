@@ -20,8 +20,9 @@ const Doctor = sequelize.define('Doctor', {
     type: DataTypes.STRING,
     allowNull: false,
   },
+  // Cloudinary URL — VARCHAR (MySQL TEXT columns cannot have DEFAULT)
   image: {
-    type: DataTypes.TEXT('long'),
+    type: DataTypes.STRING(2048),
     allowNull: false,
   },
   speciality: {
@@ -50,7 +51,7 @@ const Doctor = sequelize.define('Doctor', {
   },
   slots_booked: {
     type: DataTypes.JSON,
-    defaultValue: {},
+    allowNull: true,
   },
   address: {
     type: DataTypes.JSON,
@@ -63,6 +64,16 @@ const Doctor = sequelize.define('Doctor', {
 }, {
   tableName: 'doctors',
   timestamps: true,
+  defaultScope: {
+    attributes: { exclude: ['password'] },
+  },
+  hooks: {
+    beforeValidate(doctor) {
+      if (doctor.slots_booked == null) {
+        doctor.slots_booked = {};
+      }
+    },
+  },
 });
 
 export default Doctor;

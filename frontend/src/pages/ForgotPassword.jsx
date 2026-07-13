@@ -1,19 +1,22 @@
-import React, { useState } from 'react'
+import React, { useContext, useState } from 'react'
 import { Link } from 'react-router-dom'
-import axios from 'axios'
+import api from '../api/client'
 import { toast } from 'react-toastify'
 
 const ForgotPassword = () => {
   const [email, setEmail] = useState('')
   const [loading, setLoading] = useState(false)
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000'
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
     try {
-      const { data } = await axios.post(`${backendUrl}/api/user/forgot-password`, { email })
-      toast.success(data.message)
+      const { data } = await api.post('/api/user/forgot-password', { email })
+      if (data.success) {
+        toast.success(data.message)
+      } else {
+        toast.error(data.message)
+      }
     } catch (error) {
       toast.error(error.response?.data?.message || error.message)
     } finally {

@@ -5,7 +5,15 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const dialect = (process.env.DB_DIALECT || 'sqlite').toLowerCase();
+const dialect = (process.env.DB_DIALECT || 'mysql').toLowerCase();
+const isTest = process.env.NODE_ENV === 'test';
+
+// SQLite is only for automated tests; runtime/default is MySQL.
+if (dialect === 'sqlite' && !isTest) {
+  console.warn(
+    'DB_DIALECT=sqlite is intended for tests only. Prefer mysql for local/Docker/production.'
+  );
+}
 
 const sequelize =
   dialect === 'mysql'
@@ -40,12 +48,17 @@ export const connectDB = async () => {
     console.log(
       dialect === 'mysql' ? 'MySQL Database Connected' : 'SQLite Database Connected'
     );
+
     if (process.env.USE_MIGRATIONS === 'true') {
       console.log('Using migrations (run npm run db:migrate to apply)');
-    } else {
-      await sequelize.sync(process.env.NODE_ENV === 'production' ? { alter: false } : { alter: true });
-      console.log('Database models synchronized');
+      return;
     }
+
+    // alter:true only for local/dev — never auto-alter production schemas
+    const shouldAlter =
+      process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test';
+    await sequelize.sync(shouldAlter ? { alter: true } : { alter: false });
+    console.log('Database models synchronized');
   } catch (error) {
     console.error('Database connection error:', error);
     if (process.env.NODE_ENV !== 'test') {

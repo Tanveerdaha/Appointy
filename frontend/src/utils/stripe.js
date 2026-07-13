@@ -1,4 +1,4 @@
-import axios from 'axios'
+import api from '../api/client'
 
 export const redirectToStripeCheckout = (sessionUrl) => {
   if (!sessionUrl) {
@@ -7,12 +7,8 @@ export const redirectToStripeCheckout = (sessionUrl) => {
   window.location.assign(sessionUrl)
 }
 
-export const verifyStripePayment = async (backendUrl, token, sessionId) => {
-  const { data } = await axios.post(
-    `${backendUrl}/api/user/verify-stripe`,
-    { sessionId },
-    { headers: { token, Authorization: `Bearer ${token}` } }
-  )
+export const verifyStripePayment = async (_backendUrl, _token, sessionId) => {
+  const { data } = await api.post('/api/user/verify-stripe', { sessionId })
   return data
 }
 

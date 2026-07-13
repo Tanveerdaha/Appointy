@@ -1,19 +1,28 @@
-import React, { useContext, useState } from 'react'
+import React, { useContext, useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { AppContext } from '../context/appContext'
-import axios from 'axios'
+import api from '../api/client'
 import { toast } from 'react-toastify'
 import { assets } from '../assets/assets'
 
 const MyProfile = () => {
     const [isEdit, setIsEdit] = useState(false)
     const [image, setImage] = useState(null)
+    const [previewUrl, setPreviewUrl] = useState('')
 
-    const { token, backendUrl, userData, setUserData, loadUserProfileData } = useContext(AppContext)
+    const { token, userData, setUserData, loadUserProfileData } = useContext(AppContext)
 
-    const profileImage = image
-        ? URL.createObjectURL(image)
-        : (userData?.image || assets.profile_pic)
+    useEffect(() => {
+        if (!image) {
+            setPreviewUrl('')
+            return undefined
+        }
+        const url = URL.createObjectURL(image)
+        setPreviewUrl(url)
+        return () => URL.revokeObjectURL(url)
+    }, [image])
+
+    const profileImage = previewUrl || userData?.image || assets.profile_pic
 
     const updateUserProfileData = async () => {
         try {
@@ -25,9 +34,7 @@ const MyProfile = () => {
             formData.append('dob', userData.dob || 'Not Selected')
             if (image) formData.append('image', image)
 
-            const { data } = await axios.post(`${backendUrl}/api/user/update-profile`, formData, {
-                headers: { token }
-            })
+            const { data } = await api.post('/api/user/update-profile', formData)
 
             if (data.success) {
                 toast.success(data.message)

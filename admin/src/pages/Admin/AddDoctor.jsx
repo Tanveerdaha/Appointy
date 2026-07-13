@@ -1,21 +1,33 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { assets } from '../../assets/assets'
 import { toast } from 'react-toastify'
 import api from '../../api/client'
+import { SPECIALITIES } from '../../constants/specialities'
 
 const AddDoctor = () => {
 
   const [docImg, setDocImg] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState('')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [experience, setExperience] = useState('1 Year')
   const [fees, setFees] = useState('')
   const [about, setAbout] = useState('')
-  const [speciality, setSpeciality] = useState('General physician')
+  const [speciality, setSpeciality] = useState(SPECIALITIES[0])
   const [degree, setDegree] = useState('')
   const [address1, setAddress1] = useState('')
   const [address2, setAddress2] = useState('')
+
+  useEffect(() => {
+    if (!docImg) {
+      setPreviewUrl('')
+      return undefined
+    }
+    const url = URL.createObjectURL(docImg)
+    setPreviewUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [docImg])
 
   const onSubmitHandler = async (event) => {
     event.preventDefault();
@@ -76,7 +88,7 @@ const AddDoctor = () => {
       <div className='bg-white px-8 py-8 border rounded w-full max-w-4xl max-h-[80vh] overflow-y-scroll'>
         <div className='flex items-center gap-4 mb-8 text-gray-500'>
           <label htmlFor="doc-img">
-            <img className='w-16 bg-gray-100 rounded-full cursor-pointer' src={docImg ? URL.createObjectURL(docImg) : assets.upload_area} alt="" />
+            <img className='w-16 bg-gray-100 rounded-full cursor-pointer' src={previewUrl || assets.upload_area} alt="" />
           </label>
           <input onChange={(e) => setDocImg(e.target.files[0])} type="file" name="" id="doc-img" hidden />
           <p>Upload doctor <br /> picture</p>
@@ -130,12 +142,9 @@ const AddDoctor = () => {
             <div className='flex-1 flex flex-col gap-1'>
               <p>Speciality</p>
               <select onChange={e => setSpeciality(e.target.value)} value={speciality} className='border rounded px-2 py-2'>
-                <option value="General physician">General physician</option>
-                <option value="Gynecologist">Gynecologist</option>
-                <option value="Dermatologist">Dermatologist</option>
-                <option value="Pediatricians">Pediatricians</option>
-                <option value="Neurologist">Neurologist</option>
-                <option value="Gastroenterologist">Gastroenterologist</option>
+                {SPECIALITIES.map((spec) => (
+                  <option key={spec} value={spec}>{spec}</option>
+                ))}
               </select>
             </div>
 

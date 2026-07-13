@@ -58,6 +58,11 @@ const Appointment = sequelize.define('Appointment', {
 }, {
   tableName: 'appointments',
   timestamps: true,
+  indexes: [
+    { fields: ['userId'] },
+    { fields: ['docId'] },
+    { fields: ['paymentStatus'] },
+  ],
 });
 
 export default Appointment;

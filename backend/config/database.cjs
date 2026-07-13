@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const dialect = (process.env.DB_DIALECT || 'sqlite').toLowerCase()
+const dialect = (process.env.DB_DIALECT || 'mysql').toLowerCase()
 
 export default {
   development: {

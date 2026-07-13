@@ -20,11 +20,14 @@ export const createApp = () => {
         .map((o) => o.trim())
 
     app.use(helmet())
-    app.use(express.json({ limit: '10mb' }))
+    app.use(express.json({ limit: '1mb' }))
     app.use(cors({
         origin: (origin, callback) => {
-            const isLocalDev = origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
-            if (!origin || allowedOrigins.includes(origin) || isLocalDev) {
+            const allowLocalhost =
+                process.env.NODE_ENV !== 'production' &&
+                origin &&
+                /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+            if (!origin || allowedOrigins.includes(origin) || allowLocalhost) {
                 callback(null, true)
             } else {
                 callback(new Error('Not allowed by CORS'))
@@ -47,6 +50,8 @@ export const createApp = () => {
 
     app.use('/api/user/login', authLimiter)
     app.use('/api/user/register', authLimiter)
+    app.use('/api/user/forgot-password', authLimiter)
+    app.use('/api/user/contact', authLimiter)
     app.use('/api/admin/login', authLimiter)
     app.use('/api/doctor/login', authLimiter)
     app.use('/api/user/book-appointment', bookingLimiter)

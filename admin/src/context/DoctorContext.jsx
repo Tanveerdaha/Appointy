@@ -1,11 +1,9 @@
-import api, { apiBaseUrl } from '../api/client.js'
+import api from '../api/client.js'
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'react-toastify'
 import { DoctorContext } from './doctorContext'
 
 const DoctorContextProvider = (props) => {
-  const backendUrl = apiBaseUrl
-
   const [dToken, setDToken] = useState(
     localStorage.getItem('dToken') || ''
   )
@@ -101,15 +99,12 @@ const DoctorContextProvider = (props) => {
   const value = {
     dToken,
     setDToken,
-    backendUrl,
     getAppointments,
     appointments,
-    setAppointments,
     completeAppointment,
     cancelAppointment,
     getDashData,
     dashData,
-    setDashData,
     getProfileData,
     setProfileData,
     profileData,

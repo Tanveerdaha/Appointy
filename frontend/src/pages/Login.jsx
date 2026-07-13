@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useState } from 'react'
 import { AppContext } from '../context/appContext'
-import axios from 'axios'
+import api from '../api/client'
 import { toast } from 'react-toastify'
 import { useNavigate } from 'react-router-dom'
 
@@ -17,14 +17,9 @@ const Login = () => {
   const onSubmitHandler = async (event) => {
     event.preventDefault();
 
-    if (!backendUrl) {
-      toast.error('Backend URL is not configured. Set VITE_BACKEND_URL in frontend/.env')
-      return
-    }
-
     try {
       if (state === 'Sign Up') {
-        const { data } = await axios.post(`${backendUrl}/api/user/register`, { name, email, password })
+        const { data } = await api.post('/api/user/register', { name, email, password })
 
         if (data.success) {
           localStorage.setItem('token', data.token)
@@ -34,7 +29,7 @@ const Login = () => {
           toast.error(data.message)
         }
       } else {
-        const { data } = await axios.post(`${backendUrl}/api/user/login`, { email, password })
+        const { data } = await api.post('/api/user/login', { email, password })
 
         if (data.success) {
           localStorage.setItem('token', data.token)
@@ -46,9 +41,9 @@ const Login = () => {
       }
     } catch (error) {
       if (error.response?.status === 404) {
-        toast.error('API not found. Make sure the backend is running on http://localhost:4000')
+        toast.error(`API not found. Make sure the backend is running at ${backendUrl}`)
       } else if (error.code === 'ERR_NETWORK' || !error.response) {
-        toast.error('Cannot reach backend server. Start it with: cd backend && npm run server')
+        toast.error(`Cannot reach backend at ${backendUrl}`)
       } else {
         toast.error(error.response?.data?.message || error.message)
       }

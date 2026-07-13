@@ -1,6 +1,7 @@
 import React, { useContext, useEffect, useState } from 'react'
 import { AdminContext } from '../../context/adminContext'
 import { AppContext } from '../../context/appContext'
+import { SPECIALITIES } from '../../constants/specialities'
 
 const DoctorsList = () => {
 
@@ -60,7 +61,7 @@ const DoctorsList = () => {
       <h1 className='text-lg font-medium'>All Doctors</h1>
       <div className='w-full flex flex-wrap gap-4 pt-5 gap-y-6'>
         {doctors.map((item, index) => (
-          <div className='border border-[#C9D8FF] rounded-xl max-w-56 overflow-hidden group' key={index}>
+          <div className='border border-[#C9D8FF] rounded-xl max-w-56 overflow-hidden group' key={getId(item) || index}>
             <img className='bg-[#EAEFFF] group-hover:bg-primary transition-all duration-500' src={item.image} alt="" />
             <div className='p-4'>
               <p className='text-[#262626] text-lg font-medium'>{item.name}</p>
@@ -86,12 +87,9 @@ const DoctorsList = () => {
               <input className="border rounded px-3 py-2" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
               <input className="border rounded px-3 py-2" placeholder="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
               <select className="border rounded px-3 py-2" value={form.speciality} onChange={(e) => setForm({ ...form, speciality: e.target.value })}>
-                <option value="General physician">General physician</option>
-                <option value="Gynecologist">Gynecologist</option>
-                <option value="Dermatologist">Dermatologist</option>
-                <option value="Pediatricians">Pediatricians</option>
-                <option value="Neurologist">Neurologist</option>
-                <option value="Gastroenterologist">Gastroenterologist</option>
+                {SPECIALITIES.map((spec) => (
+                  <option key={spec} value={spec}>{spec}</option>
+                ))}
               </select>
               <input className="border rounded px-3 py-2" placeholder="Degree" value={form.degree} onChange={(e) => setForm({ ...form, degree: e.target.value })} required />
               <input className="border rounded px-3 py-2" placeholder="Experience" value={form.experience} onChange={(e) => setForm({ ...form, experience: e.target.value })} required />

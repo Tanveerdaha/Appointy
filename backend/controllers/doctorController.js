@@ -1,14 +1,15 @@
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
-import { Op } from "sequelize";
+import { Op, fn, col } from "sequelize";
 import Doctor from "../models/doctorModel.js";
 import Appointment from "../models/appointmentModel.js";
+import { cancelAppointmentAndReleaseSlot } from "../utils/appointmentSlots.js";
 
 // Doctor login
 const loginDoctor = async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = await Doctor.findOne({ where: { email } });
+    const user = await Doctor.unscoped().findOne({ where: { email } });
 
     if (!user) {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
@@ -50,18 +51,11 @@ const appointmentCancel = async (req, res) => {
       return res.status(403).json({ success: false, message: "Invalid doctor or appointment" });
     }
 
-    await Appointment.update({ cancelled: true }, { where: { id: appointmentId } });
-
-    const { docId: appointmentDocId, slotDate, slotTime } = appointment;
-    const doctorData = await Doctor.findByPk(appointmentDocId);
-
-    if (doctorData) {
-      let slots_booked = doctorData.slots_booked || {};
-      if (slots_booked[slotDate]) {
-        slots_booked[slotDate] = slots_booked[slotDate].filter((e) => e !== slotTime);
-      }
-      await Doctor.update({ slots_booked }, { where: { id: appointmentDocId } });
+    if (appointment.cancelled) {
+      return res.status(400).json({ success: false, message: "Appointment already cancelled" });
     }
+
+    await cancelAppointmentAndReleaseSlot(appointment);
 
     res.json({ success: true, message: "Appointment Cancelled" });
   } catch (error) {
@@ -102,7 +96,7 @@ const doctorList = async (req, res) => {
     }
     const doctors = await Doctor.findAll({
       where,
-      attributes: { exclude: ['password', 'email'] }
+      attributes: { exclude: ['email'] }
     });
     res.json({ success: true, doctors });
   } catch (error) {
@@ -178,21 +172,35 @@ const updateDoctorProfile = async (req, res) => {
 const doctorDashboard = async (req, res) => {
   try {
     const docId = req.user.id;
-    const appointments = await Appointment.findAll({ where: { docId } });
 
-    let earnings = 0;
-    const patientSet = new Set();
-
-    appointments.forEach((a) => {
-      if (a.isCompleted || a.payment) earnings += a.amount;
-      patientSet.add(a.userId);
-    });
+    const [appointmentsCount, earningsRow, patientRows, latestAppointments] = await Promise.all([
+      Appointment.count({ where: { docId } }),
+      Appointment.findAll({
+        where: {
+          docId,
+          [Op.or]: [{ isCompleted: true }, { payment: true }],
+        },
+        attributes: [[fn('SUM', col('amount')), 'total']],
+        raw: true,
+      }),
+      Appointment.findAll({
+        where: { docId },
+        attributes: ['userId'],
+        group: ['userId'],
+        raw: true,
+      }),
+      Appointment.findAll({
+        where: { docId },
+        order: [['createdAt', 'DESC']],
+        limit: 5,
+      }),
+    ]);
 
     const dashData = {
-      earnings,
-      appointments: appointments.length,
-      patients: patientSet.size,
-      latestAppointments: appointments.reverse().slice(0, 5),
+      earnings: Number(earningsRow?.[0]?.total) || 0,
+      appointments: appointmentsCount,
+      patients: patientRows.length,
+      latestAppointments,
     };
 
     res.json({ success: true, dashData });

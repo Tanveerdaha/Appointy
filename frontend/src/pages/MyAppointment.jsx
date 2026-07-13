@@ -1,7 +1,7 @@
 import React, { useCallback, useContext, useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppContext } from '../context/appContext'
-import axios from 'axios'
+import api from '../api/client'
 import { toast } from 'react-toastify'
 import RescheduleModal from '../components/RescheduleModal'
 import LoadingSpinner from '../components/LoadingSpinner'
@@ -9,7 +9,7 @@ import EmptyState from '../components/EmptyState'
 import { redirectToStripeCheckout, verifyStripePayment, getPaymentStatus } from '../utils/stripe'
 
 const MyAppointments = () => {
-  const { backendUrl, token, getDoctorsData, doctors } = useContext(AppContext)
+  const { token, getDoctorsData, doctors } = useContext(AppContext)
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [appointments, setAppointments] = useState([])
@@ -26,9 +26,7 @@ const MyAppointments = () => {
 
   const getUserAppointments = useCallback(async () => {
     try {
-      const { data } = await axios.get(`${backendUrl}/api/user/appointments`, {
-        headers: { token, Authorization: `Bearer ${token}` },
-      })
+      const { data } = await api.get('/api/user/appointments')
       if (data.success) {
         setAppointments([...(data.appointments || [])].reverse())
       } else {
@@ -39,15 +37,11 @@ const MyAppointments = () => {
     } finally {
       setLoading(false)
     }
-  }, [backendUrl, token])
+  }, [])
 
   const cancelAppointment = async (appointmentId) => {
     try {
-      const { data } = await axios.post(
-        `${backendUrl}/api/user/cancel-appointment`,
-        { appointmentId },
-        { headers: { token, Authorization: `Bearer ${token}` } }
-      )
+      const { data } = await api.post('/api/user/cancel-appointment', { appointmentId })
       if (data.success) {
         toast.success(data.message)
         getUserAppointments()
@@ -63,11 +57,7 @@ const MyAppointments = () => {
   const appointmentStripe = async (appointmentId) => {
     try {
       setPayingId(appointmentId)
-      const { data } = await axios.post(
-        `${backendUrl}/api/user/payment-stripe`,
-        { appointmentId },
-        { headers: { token, Authorization: `Bearer ${token}` } }
-      )
+      const { data } = await api.post('/api/user/payment-stripe', { appointmentId })
       if (data.success && data.sessionUrl) {
         redirectToStripeCheckout(data.sessionUrl)
       } else {
@@ -82,11 +72,7 @@ const MyAppointments = () => {
 
   const rescheduleAppointment = async (payload) => {
     try {
-      const { data } = await axios.post(
-        `${backendUrl}/api/user/reschedule-appointment`,
-        payload,
-        { headers: { token, Authorization: `Bearer ${token}` } }
-      )
+      const { data } = await api.post('/api/user/reschedule-appointment', payload)
       if (data.success) {
         toast.success(data.message)
         setRescheduleTarget(null)
@@ -120,7 +106,7 @@ const MyAppointments = () => {
 
     const confirmPayment = async () => {
       try {
-        const result = await verifyStripePayment(backendUrl, token, sessionId)
+        const result = await verifyStripePayment(null, null, sessionId)
         if (result.success) {
           toast.success(result.message)
           getUserAppointments()
@@ -135,7 +121,7 @@ const MyAppointments = () => {
     }
 
     confirmPayment()
-  }, [token, backendUrl, searchParams, setSearchParams, getUserAppointments])
+  }, [token, searchParams, setSearchParams, getUserAppointments])
 
   if (loading) return <LoadingSpinner label='Loading appointments...' />
 

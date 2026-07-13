@@ -5,13 +5,7 @@ import { AdminContext } from '../../context/adminContext'
 import { AppContext } from '../../context/appContext'
 import LoadingSpinner from '../../components/LoadingSpinner'
 import EmptyState from '../../components/EmptyState'
-
-const getPaymentLabel = (item) => {
-  const status = item.paymentStatus || (item.payment ? 'paid' : 'unpaid')
-  if (status === 'paid') return 'Paid'
-  if (status === 'pending') return 'Pending'
-  return 'Unpaid'
-}
+import { getPaymentLabel } from '../../utils/payment'
 
 const AllAppointments = () => {
   const { aToken, appointments, cancelAppointment, completeAppointment, getAllAppointments } = useContext(AdminContext)

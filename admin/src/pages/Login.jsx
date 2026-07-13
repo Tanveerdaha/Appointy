@@ -1,4 +1,4 @@
-import api, { apiBaseUrl } from '../api/client'
+import api from '../api/client'
 import React, { useContext, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
@@ -8,13 +8,11 @@ import { toast } from 'react-toastify'
 
 const Login = () => {
   const [state, setState] = useState('Admin')
-  const [email, setEmail] = useState('admin@example.com')
-  const [password, setPassword] = useState('admin123')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
 
   const navigate = useNavigate()
-  const backendUrl = apiBaseUrl || `${window.location.origin}/api (proxy)`
-
   const { setDToken } = useContext(DoctorContext)
   const { setAToken } = useContext(AdminContext)
 
@@ -67,7 +65,6 @@ const Login = () => {
     <form onSubmit={onSubmitHandler} className='min-h-screen flex items-center justify-center p-4 bg-[#F8F9FD]'>
       <div className='flex flex-col gap-3 w-full max-w-md items-start p-8 border rounded-xl text-[#5E5E5E] text-sm shadow-lg bg-white'>
         <p className='text-2xl font-semibold m-auto'><span className='text-primary'>{state}</span> Login</p>
-        <p className='text-xs text-gray-400 text-center w-full'>API: {backendUrl}</p>
         <div className='w-full'>
           <p>Email</p>
           <input onChange={(e) => setEmail(e.target.value)} value={email} className='border border-[#DADADA] rounded w-full p-2 mt-1' type="email" required />

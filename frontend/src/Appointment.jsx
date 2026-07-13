@@ -6,14 +6,14 @@ import RelatedDoctors from './components/RelatedDoctors'
 import LoadingSpinner from './components/LoadingSpinner'
 import EmptyState from './components/EmptyState'
 import useAvailableSlots from './hooks/useAvailableSlots'
-import axios from 'axios'
 import { toast } from 'react-toastify'
 import { redirectToStripeCheckout } from './utils/stripe'
+import api from './api/client'
 
 const Appointment = () => {
   const { docId } = useParams()
   const navigate = useNavigate()
-  const { doctors, currencySymbol, backendUrl, token, getDoctorsData } = useContext(AppContext)
+  const { doctors, doctorsLoaded, currencySymbol, token, getDoctorsData } = useContext(AppContext)
 
   const [docInfo, setDocInfo] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -25,16 +25,11 @@ const Appointment = () => {
   const { docSlots, daysOfWeek } = useAvailableSlots(docInfo)
 
   useEffect(() => {
-    if (doctors.length > 0) {
-      const doc = doctors.find((d) => (d.id || d._id) === docId)
-      if (doc) {
-        setDocInfo({ ...doc, slots_booked: doc.slots_booked || {} })
-      } else {
-        setDocInfo(null)
-      }
-      setLoading(false)
-    }
-  }, [doctors, docId])
+    if (!doctorsLoaded) return
+    const doc = doctors.find((d) => (d.id || d._id) === docId)
+    setDocInfo(doc ? { ...doc, slots_booked: doc.slots_booked || {} } : null)
+    setLoading(false)
+  }, [doctors, doctorsLoaded, docId])
 
   const handlePayment = (sessionUrl) => {
     try {
@@ -71,11 +66,12 @@ const Appointment = () => {
 
     try {
       setBooking(true)
-      const { data } = await axios.post(
-        `${backendUrl}/api/user/book-appointment`,
-        { docId, slotDate, slotTime, payMode },
-        { headers: { token, Authorization: `Bearer ${token}` } }
-      )
+      const { data } = await api.post('/api/user/book-appointment', {
+        docId,
+        slotDate,
+        slotTime,
+        payMode,
+      })
 
       if (data.success) {
         toast.success(data.message)

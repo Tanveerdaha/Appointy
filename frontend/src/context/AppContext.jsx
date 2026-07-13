@@ -1,30 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'react-toastify'
-import axios from 'axios'
-import { doctors as localDoctors } from '../assets/assets'
+import api, { apiBaseUrl } from '../api/client'
 import { AppContext } from './appContext'
-
-axios.interceptors.response.use(
-    (response) => response,
-    (error) => {
-        if (error.response?.status === 401) {
-            localStorage.removeItem('token')
-            window.location.href = '/login'
-        }
-        return Promise.reject(error)
-    }
-)
-
-axios.interceptors.request.use((config) => {
-    const token = localStorage.getItem('token')
-    if (token) {
-        config.headers.token = token
-        config.headers.Authorization = `Bearer ${token}`
-    }
-    return config
-})
-
-const DEFAULT_BACKEND_URL = 'http://localhost:4000'
 
 const normalizeDoctor = (doc) => ({
     ...doc,
@@ -37,36 +14,34 @@ const normalizeDoctor = (doc) => ({
 
 const AppContextProvider = (props) => {
     const currencySymbol = 'Rs.'
-    const backendUrl = import.meta.env.VITE_BACKEND_URL || DEFAULT_BACKEND_URL
+    const backendUrl = apiBaseUrl
 
     const [doctors, setDoctors] = useState([])
+    const [doctorsLoaded, setDoctorsLoaded] = useState(false)
     const [token, setToken] = useState(localStorage.getItem('token') || '')
     const [userData, setUserData] = useState(false)
 
     const getDoctorsData = useCallback(async () => {
-        if (!backendUrl) {
-            setDoctors(localDoctors.map(normalizeDoctor))
-            return
-        }
         try {
-            const { data } = await axios.get(backendUrl + '/api/doctor/list')
+            const { data } = await api.get('/api/doctor/list')
             if (data.success) {
                 setDoctors((data.doctors || []).map(normalizeDoctor))
             } else {
+                setDoctors([])
                 toast.error(data.message)
             }
         } catch (error) {
             console.log(error)
-            setDoctors(localDoctors.map(normalizeDoctor))
-            toast.error(error.message || 'Failed to load doctors from API, showing local data')
+            setDoctors([])
+            toast.error(error.response?.data?.message || error.message || 'Failed to load doctors')
+        } finally {
+            setDoctorsLoaded(true)
         }
-    }, [backendUrl])
+    }, [])
 
     const loadUserProfileData = useCallback(async () => {
         try {
-            const { data } = await axios.get(backendUrl + '/api/user/get-profile', {
-                headers: { token },
-            })
+            const { data } = await api.get('/api/user/get-profile')
 
             if (data.success) {
                 const safeUserData = {
@@ -84,7 +59,13 @@ const AppContextProvider = (props) => {
             console.log(error)
             toast.error(error.message)
         }
-    }, [backendUrl, token])
+    }, [])
+
+    const logout = useCallback(() => {
+        localStorage.removeItem('token')
+        setToken('')
+        setUserData(false)
+    }, [])
 
     useEffect(() => {
         getDoctorsData()
@@ -93,11 +74,14 @@ const AppContextProvider = (props) => {
     useEffect(() => {
         if (token) {
             loadUserProfileData()
+        } else {
+            setUserData(false)
         }
     }, [token, loadUserProfileData])
 
     const value = {
         doctors,
+        doctorsLoaded,
         getDoctorsData,
         currencySymbol,
         backendUrl,
@@ -106,6 +90,7 @@ const AppContextProvider = (props) => {
         userData,
         setUserData,
         loadUserProfileData,
+        logout,
     }
 
     return (

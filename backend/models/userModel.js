@@ -16,8 +16,10 @@ const User = sequelize.define('User', {
     allowNull: false,
     unique: true,
   },
+  // Cloudinary URL — VARCHAR (MySQL TEXT columns cannot have DEFAULT)
   image: {
-    type: DataTypes.TEXT('long'),
+    type: DataTypes.STRING(2048),
+    allowNull: false,
     defaultValue: '',
   },
   phone: {
@@ -26,7 +28,7 @@ const User = sequelize.define('User', {
   },
   address: {
     type: DataTypes.JSON,
-    defaultValue: { line1: '', line2: '' },
+    allowNull: true,
   },
   gender: {
     type: DataTypes.STRING,
@@ -42,15 +44,28 @@ const User = sequelize.define('User', {
   },
   resetToken: {
     type: DataTypes.STRING,
-    defaultValue: null,
+    allowNull: true,
   },
   resetTokenExpiry: {
     type: DataTypes.BIGINT,
-    defaultValue: null,
+    allowNull: true,
   },
 }, {
   tableName: 'users',
   timestamps: true,
+  defaultScope: {
+    attributes: { exclude: ['password', 'resetToken', 'resetTokenExpiry'] },
+  },
+  hooks: {
+    beforeValidate(user) {
+      if (user.address == null) {
+        user.address = { line1: '', line2: '' };
+      }
+      if (user.image == null) {
+        user.image = '';
+      }
+    },
+  },
 });
 
 export default User;

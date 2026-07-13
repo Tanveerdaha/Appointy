@@ -1,11 +1,10 @@
-import api, { apiBaseUrl } from '../api/client.js'
+import api from '../api/client.js'
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'react-toastify'
 import { AdminContext } from './adminContext'
 
 const AdminContextProvider = (props) => {
     const [aToken, setAToken] = useState(localStorage.getItem('aToken') || '')
-    const backendUrl = apiBaseUrl
     const [appointments, setAppointments] = useState(null)
     const [doctors, setDoctors] = useState([])
     const [patients, setPatients] = useState(null)
@@ -129,7 +128,7 @@ const AdminContextProvider = (props) => {
 
     const value = {
         aToken, setAToken,
-        backendUrl, doctors,
+        doctors,
         getAllDoctors, changeAvailability,
         appointments, getAllAppointments, cancelAppointment, completeAppointment,
         updateDoctor, deleteDoctor,

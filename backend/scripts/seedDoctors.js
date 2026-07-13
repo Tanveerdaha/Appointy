@@ -2,30 +2,11 @@ import 'dotenv/config';
 import bcrypt from 'bcrypt';
 import { connectDB } from '../config/mysql.js';
 import Doctor from '../models/doctorModel.js';
-import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+/** Seed uses Cloudinary CDN URLs — runtime uploads go through Cloudinary only. */
+const SEED_IMAGE_URL =
+  'https://res.cloudinary.com/demo/image/upload/w_400,h_400,c_fill/sample.jpg';
 
-// Resolve image paths from the frontend assets directory
-const assetsDir = path.resolve(__dirname, '../../frontend/src/assets');
-
-/**
- * Read an image file and convert it to a base64 data URI so it can be stored
- * directly in the database (matching how the admin panel uploads work).
- */
-function imageToDataUri(filename) {
-  const filePath = path.join(assetsDir, filename);
-  if (!fs.existsSync(filePath)) {
-    console.warn(`Warning: Image not found at ${filePath}, using placeholder`);
-    return 'https://res.cloudinary.com/demo/image/upload/v1690000000/sample.jpg';
-  }
-  const buffer = fs.readFileSync(filePath);
-  const base64 = buffer.toString('base64');
-  return `data:image/png;base64,${base64}`;
-}
 
 const doctorsData = [
   {
@@ -219,7 +200,7 @@ async function seedDoctors() {
   const rows = doctorsData.map((doc) => ({
     name: doc.name,
     email: doc.email,
-    image: imageToDataUri(doc.image),
+    image: SEED_IMAGE_URL,
     speciality: doc.speciality,
     degree: doc.degree,
     experience: doc.experience,

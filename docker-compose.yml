@@ -2,8 +2,8 @@ services:
   mysql:
     image: mysql:8
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: appointy
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_DB:-appointy}
     ports:
       - "3306:3306"
     volumes:
@@ -14,25 +14,37 @@ services:
       timeout: 5s
       retries: 5
 
-  api:
+  backend:
     build: ./backend
     ports:
       - "4000:4000"
-    environment:
-      DB_DIALECT: mysql
-      MYSQL_HOST: mysql
-      MYSQL_PORT: 3306
-      MYSQL_USER: root
-      MYSQL_PASSWORD: rootpassword
-      MYSQL_DB: appointy
-      JWT_SECRET: docker_jwt_secret_change_me
-      ADMIN_EMAIL: admin@example.com
-      ADMIN_PASSWORD: admin123456
-      CURRENCY: INR
-      ALLOWED_ORIGINS: http://localhost:5173,http://localhost:5174
+    env_file:
+      - ./backend/.env
     depends_on:
       mysql:
         condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_BACKEND_URL: ${VITE_BACKEND_URL:-http://localhost:4000}
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+  admin:
+    build:
+      context: ./admin
+      args:
+        VITE_BACKEND_URL: ${VITE_BACKEND_URL:-http://localhost:4000}
+        VITE_CURRENCY: ${VITE_CURRENCY:-PKR}
+        VITE_PATIENT_URL: ${VITE_PATIENT_URL:-http://localhost:5173}
+    ports:
+      - "5174:80"
+    depends_on:
+      - backend
 
 volumes:
   mysql_data:

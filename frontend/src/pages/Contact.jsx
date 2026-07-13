@@ -1,18 +1,17 @@
-import React, { useState } from 'react'
+import React, { useContext, useState } from 'react'
 import { assets } from '../assets/assets'
-import axios from 'axios'
+import api from '../api/client'
 import { toast } from 'react-toastify'
 
 const Contact = () => {
   const [form, setForm] = useState({ name: '', email: '', message: '' })
   const [loading, setLoading] = useState(false)
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000'
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
     try {
-      const { data } = await axios.post(`${backendUrl}/api/user/contact`, form)
+      const { data } = await api.post('/api/user/contact', form)
       if (data.success) {
         toast.success(data.message)
         setForm({ name: '', email: '', message: '' })
