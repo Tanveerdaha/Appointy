@@ -70,7 +70,7 @@ VITE_BACKEND_URL=http://localhost:4000
 
 ```env
 VITE_BACKEND_URL=
-VITE_CURRENCY=INR
+VITE_CURRENCY=PKR
 ```
 
 ### 3. Seed demo doctors (optional)
