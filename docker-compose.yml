@@ -20,6 +20,12 @@ services:
       - "4000:4000"
     env_file:
       - ./backend/.env
+    environment:
+      # Inside Compose the DB hostname is the mysql service, not localhost
+      DB_DIALECT: mysql
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      NODE_ENV: production
     depends_on:
       mysql:
         condition: service_healthy
