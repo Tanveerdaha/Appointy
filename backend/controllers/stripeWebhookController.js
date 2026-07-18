@@ -3,6 +3,7 @@ import {
     markAppointmentPaidFromCheckoutSession,
     handleCheckoutSessionExpired,
     handleAsyncPaymentFailed,
+    markPaymentRefunded,
 } from '../services/stripePaymentService.js'
 
 const logWebhook = (level, message, meta = {}) => {
@@ -114,6 +115,28 @@ export const handleStripeWebhook = async (req, res) => {
                     paymentIntentId: event.data.object?.id,
                 })
                 // Card Checkout is usually synchronous; acknowledge without mutating paid state.
+                break
+            }
+
+            case 'charge.refunded': {
+                const charge = event.data.object
+                const paymentIntentId =
+                    typeof charge.payment_intent === 'string'
+                        ? charge.payment_intent
+                        : charge.payment_intent?.id || null
+                const result = await markPaymentRefunded({
+                    paymentIntentId,
+                    stripeEventId: event.id,
+                    eventType: event.type,
+                    amountRefunded: charge.amount_refunded,
+                })
+                logWebhook('info', 'refund handled', {
+                    eventId: event.id,
+                    paymentIntentId,
+                    result: result.status,
+                    appointmentId: result.appointmentId,
+                    appointmentStatus: result.appointmentStatus,
+                })
                 break
             }
 

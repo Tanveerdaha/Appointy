@@ -1,6 +1,23 @@
 import { DataTypes } from 'sequelize';
 import sequelize from '../config/mysql.js';
 
+export const APPOINTMENT_STATUS = {
+  PENDING_PAYMENT: 'PENDING_PAYMENT',
+  CONFIRMED: 'CONFIRMED',
+  COMPLETED: 'COMPLETED',
+  CANCELLED: 'CANCELLED',
+  NO_SHOW: 'NO_SHOW',
+};
+
+/** Statuses that occupy a doctor slot. */
+export const SLOT_HOLDING_STATUSES = [
+  APPOINTMENT_STATUS.PENDING_PAYMENT,
+  APPOINTMENT_STATUS.CONFIRMED,
+  APPOINTMENT_STATUS.COMPLETED,
+];
+
+export const APPOINTMENT_STATUS_VALUES = Object.values(APPOINTMENT_STATUS);
+
 const Appointment = sequelize.define('Appointment', {
   id: {
     type: DataTypes.UUID,
@@ -21,7 +38,7 @@ const Appointment = sequelize.define('Appointment', {
     allowNull: false,
   },
   /**
-   * Equals startTime while the slot is held; NULL when cancelled/refunded.
+   * Equals startTime while the slot is held; NULL when cancelled/no-show.
    * UNIQUE(docId, heldStartTime) enforces one active booking per doctor/time.
    */
   heldStartTime: {
@@ -29,13 +46,28 @@ const Appointment = sequelize.define('Appointment', {
     allowNull: true,
   },
   /**
-   * Scheduling lifecycle. Availability uses SLOT_HOLDING_STATUSES in appointmentService.
+   * Scheduling lifecycle (source of truth).
    * Kept in sync with cancelled / isCompleted for backward compatibility.
    */
   status: {
-    type: DataTypes.STRING,
+    type: DataTypes.STRING(32),
     allowNull: false,
-    defaultValue: 'CONFIRMED',
+    defaultValue: APPOINTMENT_STATUS.CONFIRMED,
+    validate: {
+      isIn: [APPOINTMENT_STATUS_VALUES],
+    },
+  },
+  statusChangedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
+  completedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
+  cancelledAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
   },
   /** @deprecated Prefer startTime — kept for display/back-compat. */
   slotDate: {
@@ -63,6 +95,7 @@ const Appointment = sequelize.define('Appointment', {
     type: DataTypes.BIGINT,
     allowNull: false,
   },
+  /** @deprecated Prefer status — kept for backward compatibility. */
   cancelled: {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
@@ -87,6 +120,7 @@ const Appointment = sequelize.define('Appointment', {
     type: DataTypes.DATE,
     allowNull: true,
   },
+  /** @deprecated Prefer status — kept for backward compatibility. */
   isCompleted: {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
@@ -102,6 +136,8 @@ const Appointment = sequelize.define('Appointment', {
     { fields: ['stripePaymentIntentId'] },
     { fields: ['status'] },
     { fields: ['startTime'] },
+    { fields: ['docId', 'status', 'startTime'], name: 'appointments_doc_status_start_time' },
+    { fields: ['userId', 'status'], name: 'appointments_user_status' },
     {
       unique: true,
       fields: ['docId', 'heldStartTime'],

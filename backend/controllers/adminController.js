@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { Op } from "sequelize";
 import Appointment from "../models/appointmentModel.js";
 import Doctor from "../models/doctorModel.js";
 import bcrypt from "bcrypt";
@@ -7,7 +8,13 @@ import { uploadImage } from "../utils/uploadImage.js";
 import User from "../models/userModel.js"
 import { verifyAdminPassword } from "../middlewares/authAdmin.js";
 import { notifyAppointmentCancelled } from "../services/notificationService.js";
-import { cancelAppointmentAndReleaseSlot } from "../utils/appointmentSlots.js";
+import {
+  cancelAppointment as cancelAppointmentLifecycle,
+  completeAppointment as completeAppointmentLifecycle,
+  LifecycleError,
+  ACTOR_TYPE,
+  APPOINTMENT_STATUS,
+} from "../services/appointmentStateService.js";
 
 // API for admin login
 const loginAdmin = async (req, res) => {
@@ -95,17 +102,27 @@ const appointmentCancel = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Appointment not found' })
         }
 
-        if (appointmentData.cancelled) {
+        if (appointmentData.status === APPOINTMENT_STATUS.CANCELLED) {
             return res.status(400).json({ success: false, message: 'Appointment already cancelled' })
         }
 
-        await cancelAppointmentAndReleaseSlot(appointmentData)
+        await cancelAppointmentLifecycle(appointmentData.id, {
+            actorType: ACTOR_TYPE.ADMIN,
+            reason: 'Cancelled by admin',
+        })
 
         notifyAppointmentCancelled(appointmentData, appointmentData.userData?.email).catch(console.error)
 
         res.json({ success: true, message: 'Appointment Cancelled' })
 
     } catch (error) {
+        if (error instanceof LifecycleError) {
+            return res.status(error.statusCode).json({
+                success: false,
+                message: error.message,
+                code: error.code,
+            })
+        }
         console.log(error)
         res.status(500).json({ success: false, message: error.message })
     }
@@ -142,10 +159,16 @@ const adminDashboard = async (req, res) => {
             User.count(),
             Appointment.count(),
             Appointment.sum('amount', {
-                where: { cancelled: false, paymentStatus: 'paid' },
+                where: {
+                    status: { [Op.ne]: APPOINTMENT_STATUS.CANCELLED },
+                    paymentStatus: 'paid',
+                },
             }),
             Appointment.count({
-                where: { cancelled: false, paymentStatus: 'paid' },
+                where: {
+                    status: { [Op.ne]: APPOINTMENT_STATUS.CANCELLED },
+                    paymentStatus: 'paid',
+                },
             }),
             Appointment.findAll({
                 order: [['createdAt', 'DESC']],
@@ -177,21 +200,24 @@ const appointmentComplete = async (req, res) => {
         const appointment = await Appointment.findByPk(appointmentId)
 
         if (!appointment) {
-            return res.json({ success: false, message: 'Appointment not found' })
+            return res.status(404).json({ success: false, message: 'Appointment not found' })
         }
 
-        if (appointment.cancelled) {
-            return res.json({ success: false, message: 'Cannot complete a cancelled appointment' })
-        }
-
-        await Appointment.update(
-            { isCompleted: true, status: 'COMPLETED' },
-            { where: { id: appointmentId } }
-        )
+        await completeAppointmentLifecycle(appointment.id, {
+            actorType: ACTOR_TYPE.ADMIN,
+            reason: 'Completed by admin',
+        })
         res.json({ success: true, message: 'Appointment Completed' })
     } catch (error) {
+        if (error instanceof LifecycleError) {
+            return res.status(error.statusCode).json({
+                success: false,
+                message: error.message,
+                code: error.code,
+            })
+        }
         console.log(error)
-        res.json({ success: false, message: error.message })
+        res.status(500).json({ success: false, message: error.message })
     }
 }
 
@@ -266,7 +292,10 @@ const deleteDoctor = async (req, res) => {
         }
 
         const activeAppointments = await Appointment.count({
-            where: { docId, cancelled: false, isCompleted: false }
+            where: {
+                docId,
+                status: { [Op.in]: [APPOINTMENT_STATUS.PENDING_PAYMENT, APPOINTMENT_STATUS.CONFIRMED] },
+            },
         })
 
         if (activeAppointments > 0) {

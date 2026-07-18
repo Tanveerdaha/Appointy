@@ -5,7 +5,6 @@ import User from "../models/userModel.js";
 import Appointment from "../models/appointmentModel.js";
 import jwt from "jsonwebtoken";
 import { uploadImage } from '../utils/uploadImage.js';
-import { cancelAppointmentAndReleaseSlot } from '../utils/appointmentSlots.js';
 import { notifyAppointmentBooked, notifyAppointmentCancelled, notifyPasswordReset } from '../services/notificationService.js';
 import {
     reconcileCheckoutSession,
@@ -19,6 +18,12 @@ import {
     rescheduleAppointment as rescheduleAppointmentService,
     SchedulingError,
 } from '../services/appointmentService.js'
+import {
+    cancelAppointment as cancelAppointmentLifecycle,
+    LifecycleError,
+    ACTOR_TYPE,
+    APPOINTMENT_STATUS,
+} from '../services/appointmentStateService.js'
 
 const JWT_OPTIONS = { expiresIn: '7d' }
 
@@ -206,17 +211,20 @@ const cancelAppointment = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Unauthorized action' })
         }
 
-        const status = appointmentData.paymentStatus || (appointmentData.payment ? 'paid' : 'unpaid')
-        if (status === 'paid') {
+        const paymentStatus = appointmentData.paymentStatus || (appointmentData.payment ? 'paid' : 'unpaid')
+        if (paymentStatus === 'paid') {
             return res.status(400).json({ success: false, message: 'Paid appointments cannot be cancelled online. Contact support for refund.' })
         }
 
-        if (appointmentData.cancelled || appointmentData.status === 'CANCELLED') {
+        if (appointmentData.status === APPOINTMENT_STATUS.CANCELLED) {
             return res.status(400).json({ success: false, message: 'Appointment already cancelled' })
         }
 
-        await cancelAppointmentAndReleaseSlot(appointmentData, {
-            extraAppointmentFields: { paymentStatus: 'unpaid' },
+        await cancelAppointmentLifecycle(appointmentData.id, {
+            actorType: ACTOR_TYPE.USER,
+            actorId: userId,
+            reason: 'Cancelled by patient',
+            extraFields: { paymentStatus: 'unpaid' },
         })
 
         const user = await User.findByPk(userId)
@@ -225,6 +233,13 @@ const cancelAppointment = async (req, res) => {
         res.json({ success: true, message: 'Appointment Cancelled' })
 
     } catch (error) {
+        if (error instanceof LifecycleError) {
+            return res.status(error.statusCode).json({
+                success: false,
+                message: error.message,
+                code: error.code,
+            })
+        }
         console.log(error)
         res.status(500).json({ success: false, message: error.message })
     }

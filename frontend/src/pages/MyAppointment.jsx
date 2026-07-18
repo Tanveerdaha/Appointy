@@ -7,6 +7,7 @@ import RescheduleModal from '../components/RescheduleModal'
 import LoadingSpinner from '../components/LoadingSpinner'
 import EmptyState from '../components/EmptyState'
 import { redirectToStripeCheckout, verifyStripePayment, getPaymentStatus } from '../utils/stripe'
+import { getLifecycleActions } from '../utils/appointmentLifecycle'
 
 const MyAppointments = () => {
   const { token, getDoctorsData, doctors } = useContext(AppContext)
@@ -150,7 +151,8 @@ const MyAppointments = () => {
         <div>
           {appointments.map((item) => {
             const apptId = item.id || item._id
-            const status = getPaymentStatus(item)
+            const paymentStatus = getPaymentStatus(item)
+            const actions = getLifecycleActions(item, paymentStatus)
             return (
               <div key={apptId} className='grid grid-cols-[1fr_2fr] gap-4 sm:flex sm:gap-6 py-4 border-b'>
                 <div>
@@ -167,12 +169,12 @@ const MyAppointments = () => {
                     {slotDateFormat(item.slotDate)} | {item.slotTime}
                   </p>
                   <p className='text-xs mt-1 text-gray-500'>
-                    Payment: {status === 'paid' ? 'Paid' : status === 'pending' ? 'Pending' : 'Unpaid'}
+                    Payment: {paymentStatus === 'paid' ? 'Paid' : paymentStatus === 'pending' ? 'Pending' : paymentStatus === 'refunded' ? 'Refunded' : 'Unpaid'}
                   </p>
                 </div>
                 <div />
                 <div className='flex flex-col gap-2 justify-end text-sm text-center'>
-                  {!item.cancelled && status !== 'paid' && !item.isCompleted && (
+                  {actions.showPay && (
                     <button
                       onClick={() => appointmentStripe(apptId)}
                       disabled={payingId === apptId}
@@ -181,23 +183,23 @@ const MyAppointments = () => {
                       {payingId === apptId ? 'Creating payment...' : 'Pay with Stripe'}
                     </button>
                   )}
-                  {!item.cancelled && status === 'paid' && !item.isCompleted && (
+                  {actions.showPaid && (
                     <button className='sm:min-w-48 py-2 border rounded text-[#696969] bg-[#EAEFFF]'>Paid</button>
                   )}
-                  {item.isCompleted && (
+                  {actions.showCompleted && (
                     <button className='sm:min-w-48 py-2 border border-green-500 rounded text-green-500'>Completed</button>
                   )}
-                  {!item.cancelled && !item.isCompleted && (
+                  {actions.showReschedule && (
                     <button onClick={() => setRescheduleTarget(item)} className='text-[#696969] sm:min-w-48 py-2 border rounded hover:bg-blue-600 hover:text-white transition-all duration-300'>
                       Reschedule
                     </button>
                   )}
-                  {!item.cancelled && !item.isCompleted && status !== 'paid' && (
+                  {actions.showCancel && (
                     <button onClick={() => cancelAppointment(apptId)} className='text-[#696969] sm:min-w-48 py-2 border rounded hover:bg-red-600 hover:text-white transition-all duration-300'>
                       Cancel appointment
                     </button>
                   )}
-                  {item.cancelled && !item.isCompleted && (
+                  {actions.showCancelled && (
                     <button className='sm:min-w-48 py-2 border border-red-500 rounded text-red-500'>Appointment cancelled</button>
                   )}
                 </div>

@@ -1,3 +1,8 @@
-{
-  "configFile": "config/database.cjs"
+const path = require('path')
+
+module.exports = {
+  config: path.resolve('config', 'database.cjs'),
+  'migrations-path': path.resolve('migrations'),
+  'seeders-path': path.resolve('seeders'),
+  'models-path': path.resolve('models'),
 }

@@ -7,7 +7,7 @@ import request from 'supertest'
 import bcrypt from 'bcrypt'
 
 let app
-let User, Doctor, Appointment
+let User, Doctor, Appointment, AppointmentHistory
 
 beforeAll(async () => {
     process.env.NODE_ENV = 'test'
@@ -21,12 +21,14 @@ beforeAll(async () => {
     User = (await import('../models/userModel.js')).default
     Doctor = (await import('../models/doctorModel.js')).default
     Appointment = (await import('../models/appointmentModel.js')).default
+    AppointmentHistory = (await import('../models/appointmentHistoryModel.js')).default
 
     await initServices()
     app = createApp()
 })
 
 beforeEach(async () => {
+    await AppointmentHistory.destroy({ where: {}, truncate: true })
     await Appointment.destroy({ where: {}, truncate: true })
     await Doctor.destroy({ where: {}, truncate: true })
     await User.destroy({ where: {}, truncate: true })

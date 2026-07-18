@@ -3,7 +3,13 @@ import bcrypt from "bcrypt";
 import { Op, fn, col } from "sequelize";
 import Doctor from "../models/doctorModel.js";
 import Appointment from "../models/appointmentModel.js";
-import { cancelAppointmentAndReleaseSlot } from "../utils/appointmentSlots.js";
+import {
+  cancelAppointment as cancelAppointmentLifecycle,
+  completeAppointment as completeAppointmentLifecycle,
+  LifecycleError,
+  ACTOR_TYPE,
+  APPOINTMENT_STATUS,
+} from "../services/appointmentStateService.js";
 
 // Doctor login
 const loginDoctor = async (req, res) => {
@@ -51,14 +57,25 @@ const appointmentCancel = async (req, res) => {
       return res.status(403).json({ success: false, message: "Invalid doctor or appointment" });
     }
 
-    if (appointment.cancelled) {
+    if (appointment.status === APPOINTMENT_STATUS.CANCELLED) {
       return res.status(400).json({ success: false, message: "Appointment already cancelled" });
     }
 
-    await cancelAppointmentAndReleaseSlot(appointment);
+    await cancelAppointmentLifecycle(appointment.id, {
+      actorType: ACTOR_TYPE.DOCTOR,
+      actorId: docId,
+      reason: 'Cancelled by doctor',
+    });
 
     res.json({ success: true, message: "Appointment Cancelled" });
   } catch (error) {
+    if (error instanceof LifecycleError) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+        code: error.code,
+      });
+    }
     console.error(error);
     res.status(500).json({ success: false, message: error.message });
   }
@@ -75,12 +92,20 @@ const appointmentComplete = async (req, res) => {
       return res.status(403).json({ success: false, message: "Invalid doctor or appointment" });
     }
 
-    await Appointment.update(
-      { isCompleted: true, status: 'COMPLETED' },
-      { where: { id: appointmentId } }
-    );
+    await completeAppointmentLifecycle(appointment.id, {
+      actorType: ACTOR_TYPE.DOCTOR,
+      actorId: docId,
+      reason: 'Completed by doctor',
+    });
     res.json({ success: true, message: "Appointment Completed" });
   } catch (error) {
+    if (error instanceof LifecycleError) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+        code: error.code,
+      });
+    }
     console.error(error);
     res.status(500).json({ success: false, message: error.message });
   }
@@ -181,7 +206,11 @@ const doctorDashboard = async (req, res) => {
       Appointment.findAll({
         where: {
           docId,
-          [Op.or]: [{ isCompleted: true }, { payment: true }],
+          status: { [Op.ne]: APPOINTMENT_STATUS.CANCELLED },
+          [Op.or]: [
+            { status: APPOINTMENT_STATUS.COMPLETED },
+            { paymentStatus: 'paid' },
+          ],
         },
         attributes: [[fn('SUM', col('amount')), 'total']],
         raw: true,

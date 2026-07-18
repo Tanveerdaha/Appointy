@@ -1,48 +1,4 @@
-import sequelize from '../config/mysql.js'
-import Appointment from '../models/appointmentModel.js'
-import { lockDoctorForUpdate } from './lockDoctor.js'
-import { parseLegacySlot, toLegacySlotFields } from './slotTime.js'
-
-/**
- * Mark appointment cancelled and release the doctor slot under a row lock.
- * Clears heldStartTime so the unique doctor/slot index allows rebooking.
- */
-export const cancelAppointmentAndReleaseSlot = async (
-  appointment,
-  { extraAppointmentFields = {} } = {}
-) => {
-  const transaction = await sequelize.transaction()
-  try {
-    await Appointment.update(
-      {
-        cancelled: true,
-        status: 'CANCELLED',
-        heldStartTime: null,
-        ...extraAppointmentFields,
-      },
-      { where: { id: appointment.id }, transaction }
-    )
-
-    const doctor = await lockDoctorForUpdate(appointment.docId, transaction)
-    if (doctor) {
-      const legacy = appointment.startTime
-        ? toLegacySlotFields(new Date(appointment.startTime))
-        : { slotDate: appointment.slotDate, slotTime: appointment.slotTime }
-      const slots_booked = { ...(doctor.slots_booked || {}) }
-      if (slots_booked[legacy.slotDate]) {
-        slots_booked[legacy.slotDate] = slots_booked[legacy.slotDate].filter(
-          (t) => t !== legacy.slotTime
-        )
-      }
-      await doctor.update({ slots_booked }, { transaction })
-    }
-
-    await transaction.commit()
-  } catch (error) {
-    await transaction.rollback()
-    throw error
-  }
-}
+import { parseLegacySlot } from './slotTime.js'
 
 /** Snapshot fields stored on appointments — no secrets or slot maps. */
 export const toSafeDoctorSnapshot = (doctor) => {

@@ -13,22 +13,15 @@ import {
   parseStartTimeInput,
   toLegacySlotFields,
 } from '../utils/slotTime.js'
+import {
+  APPOINTMENT_STATUS,
+  SLOT_HOLDING_STATUSES,
+  ACTOR_TYPE,
+  recordInitialStatus,
+  isReschedulableStatus,
+} from './appointmentStateService.js'
 
-export const APPOINTMENT_STATUS = {
-  PENDING_PAYMENT: 'PENDING_PAYMENT',
-  CONFIRMED: 'CONFIRMED',
-  COMPLETED: 'COMPLETED',
-  CANCELLED: 'CANCELLED',
-  REFUNDED: 'REFUNDED',
-  NO_SHOW: 'NO_SHOW',
-}
-
-/** Statuses that occupy a doctor slot. */
-export const SLOT_HOLDING_STATUSES = [
-  APPOINTMENT_STATUS.PENDING_PAYMENT,
-  APPOINTMENT_STATUS.CONFIRMED,
-  APPOINTMENT_STATUS.COMPLETED,
-]
+export { APPOINTMENT_STATUS, SLOT_HOLDING_STATUSES }
 
 export class SchedulingError extends Error {
   constructor(message, { statusCode = 400, code = 'scheduling_error' } = {}) {
@@ -91,6 +84,17 @@ const safeRollback = async (transaction) => {
   } catch {
     // Connection may already be cleaned up (e.g. nested SQLite failures).
   }
+}
+
+const lockAppointmentRow = async (appointmentId, transaction) => {
+  const dialect = Appointment.sequelize.getDialect()
+  if (dialect === 'mysql') {
+    return Appointment.findByPk(appointmentId, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    })
+  }
+  return Appointment.findByPk(appointmentId, { transaction })
 }
 
 /**
@@ -255,6 +259,7 @@ export const createAppointment = async ({
       const paymentStatus = payMode === 'now' ? 'pending' : 'unpaid'
       const status =
         payMode === 'now' ? APPOINTMENT_STATUS.PENDING_PAYMENT : APPOINTMENT_STATUS.CONFIRMED
+      const now = new Date()
 
       const appointment = await Appointment.create(
         {
@@ -271,11 +276,20 @@ export const createAppointment = async ({
           payment: false,
           paymentStatus,
           status,
+          statusChangedAt: now,
           cancelled: false,
           isCompleted: false,
         },
         { transaction }
       )
+
+      await recordInitialStatus(appointment, {
+        actorType: ACTOR_TYPE.USER,
+        actorId: userId,
+        reason: payMode === 'now' ? 'Booked with pay-now hold' : 'Booked with pay-later confirmation',
+        metadata: { payMode },
+        transaction,
+      })
 
       // Denormalized cache for legacy UI only — appointments remain source of truth.
       const slots_booked = syncSlotsBookedCache(doctor.slots_booked, { add: legacy })
@@ -326,51 +340,8 @@ export const createAppointment = async ({
 }
 
 /**
- * Cancel appointment and release the held slot (clears heldStartTime).
- */
-export const releaseSlot = async (
-  appointment,
-  { extraAppointmentFields = {}, transaction: outerTx = null } = {}
-) => {
-  const run = async (transaction) => {
-    await Appointment.update(
-      {
-        cancelled: true,
-        status: APPOINTMENT_STATUS.CANCELLED,
-        heldStartTime: null,
-        ...extraAppointmentFields,
-      },
-      { where: { id: appointment.id }, transaction }
-    )
-
-    const doctor = await lockDoctorForUpdate(appointment.docId, transaction)
-    if (doctor) {
-      const legacy =
-        appointment.startTime
-          ? toLegacySlotFields(new Date(appointment.startTime))
-          : { slotDate: appointment.slotDate, slotTime: appointment.slotTime }
-      const slots_booked = syncSlotsBookedCache(doctor.slots_booked, { remove: legacy })
-      await doctor.update({ slots_booked }, { transaction })
-    }
-  }
-
-  if (outerTx) {
-    await run(outerTx)
-    return
-  }
-
-  const transaction = await sequelize.transaction()
-  try {
-    await run(transaction)
-    await transaction.commit()
-  } catch (error) {
-    await safeRollback(transaction)
-    throw error
-  }
-}
-
-/**
  * Reschedule with the same transactional + unique-constraint guarantees as booking.
+ * Only CONFIRMED appointments may be rescheduled.
  */
 export const rescheduleAppointment = async ({
   appointmentId,
@@ -402,20 +373,14 @@ export const rescheduleAppointment = async ({
     let transaction
     try {
       transaction = await sequelize.transaction()
-      const appointment = await Appointment.findByPk(appointmentId, { transaction })
+      const appointment = await lockAppointmentRow(appointmentId, transaction)
       if (!appointment) {
         throw new SchedulingError('Appointment not found', { statusCode: 404, code: 'not_found' })
       }
       if (appointment.userId !== userId) {
         throw new SchedulingError('Unauthorized action', { statusCode: 403, code: 'unauthorized' })
       }
-      if (
-        appointment.cancelled ||
-        appointment.isCompleted ||
-        appointment.status === APPOINTMENT_STATUS.CANCELLED ||
-        appointment.status === APPOINTMENT_STATUS.COMPLETED ||
-        appointment.status === APPOINTMENT_STATUS.REFUNDED
-      ) {
+      if (!isReschedulableStatus(appointment.status)) {
         throw new SchedulingError('Cannot reschedule this appointment', {
           statusCode: 400,
           code: 'not_reschedulable',
@@ -487,28 +452,4 @@ export const rescheduleAppointment = async ({
       throw error
     }
   })
-}
-
-export const markAppointmentCompleted = async (appointmentId) => {
-  await Appointment.update(
-    {
-      isCompleted: true,
-      status: APPOINTMENT_STATUS.COMPLETED,
-    },
-    { where: { id: appointmentId } }
-  )
-}
-
-export const markAppointmentConfirmedAfterPayment = async (appointment, transaction) => {
-  const updates = {
-    payment: true,
-    paymentStatus: 'paid',
-  }
-  if (
-    !appointment.status ||
-    appointment.status === APPOINTMENT_STATUS.PENDING_PAYMENT
-  ) {
-    updates.status = APPOINTMENT_STATUS.CONFIRMED
-  }
-  await appointment.update(updates, { transaction })
 }

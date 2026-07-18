@@ -35,7 +35,7 @@ const buildEvent = (type, session, eventId = 'evt_test_1') => ({
 })
 
 let app
-let User, Doctor, Appointment, StripeWebhookEvent, StripePayment
+let User, Doctor, Appointment, StripeWebhookEvent, StripePayment, AppointmentHistory
 
 beforeAll(async () => {
     process.env.NODE_ENV = 'test'
@@ -53,6 +53,7 @@ beforeAll(async () => {
     User = (await import('../models/userModel.js')).default
     Doctor = (await import('../models/doctorModel.js')).default
     Appointment = (await import('../models/appointmentModel.js')).default
+    AppointmentHistory = (await import('../models/appointmentHistoryModel.js')).default
     StripeWebhookEvent = (await import('../models/stripeWebhookEventModel.js')).default
     StripePayment = (await import('../models/stripePaymentModel.js')).default
 
@@ -63,6 +64,7 @@ beforeAll(async () => {
 beforeEach(async () => {
     await StripePayment.destroy({ where: {}, truncate: true })
     await StripeWebhookEvent.destroy({ where: {}, truncate: true })
+    await AppointmentHistory.destroy({ where: {}, truncate: true })
     await Appointment.destroy({ where: {}, truncate: true })
     await Doctor.destroy({ where: {}, truncate: true })
     await User.destroy({ where: {}, truncate: true })
@@ -107,7 +109,8 @@ const seedPendingAppointment = async ({
         slotDate: '18_7_2026',
         startTime,
         heldStartTime: cancelled ? null : startTime,
-        status: cancelled ? 'CANCELLED' : paymentStatus === 'pending' ? 'PENDING_PAYMENT' : 'CONFIRMED',
+        status: cancelled ? 'CANCELLED' : paymentStatus === 'pending' ? 'PENDING_PAYMENT' : paymentStatus === 'paid' ? 'CONFIRMED' : 'CONFIRMED',
+        statusChangedAt: new Date(),
         date: Date.now(),
         payment,
         paymentStatus,
@@ -151,6 +154,7 @@ describe('Stripe webhook payment reliability', () => {
         await appointment.reload()
         expect(appointment.payment).toBe(true)
         expect(appointment.paymentStatus).toBe('paid')
+        expect(appointment.status).toBe('CONFIRMED')
         expect(appointment.stripeCheckoutSessionId).toBe(session.id)
         expect(appointment.stripePaymentIntentId).toBe('pi_test_intent_1')
         expect(appointment.paidAt).toBeTruthy()
@@ -272,6 +276,7 @@ describe('Stripe webhook payment reliability', () => {
 
         await appointment.reload()
         expect(appointment.cancelled).toBe(true)
+        expect(appointment.status).toBe('CANCELLED')
         expect(appointment.paymentStatus).not.toBe('paid')
         expect(appointment.payment).toBe(false)
         expect(appointment.stripeCheckoutSessionId).toBe(session.id)
@@ -348,6 +353,8 @@ describe('Stripe webhook payment reliability', () => {
         await appointment.reload()
         expect(appointment.paymentStatus).toBe('unpaid')
         expect(appointment.payment).toBe(false)
+        expect(appointment.status).toBe('CANCELLED')
+        expect(appointment.heldStartTime).toBeNull()
     })
 
     test('expired session never downgrades paid appointment', async () => {
@@ -372,6 +379,53 @@ describe('Stripe webhook payment reliability', () => {
         await appointment.reload()
         expect(appointment.paymentStatus).toBe('paid')
         expect(appointment.payment).toBe(true)
+    })
+
+    test('Test 5 — refund completed paid appointment keeps COMPLETED and refunds payment only', async () => {
+        const { user, appointment } = await seedPendingAppointment({
+            amount: 500,
+            payment: true,
+            paymentStatus: 'paid',
+        })
+        await appointment.update({
+            status: 'COMPLETED',
+            isCompleted: true,
+            cancelled: false,
+            completedAt: new Date(),
+        })
+
+        await StripePayment.create({
+            appointmentId: appointment.id,
+            userId: user.id,
+            amount: 50000,
+            currency: 'pkr',
+            status: 'PAID',
+            stripeCheckoutSessionId: 'cs_refund_1',
+            stripePaymentIntentId: 'pi_refund_1',
+            paidAt: new Date(),
+            activeAppointmentId: null,
+        })
+
+        const charge = {
+            id: 'ch_refund_1',
+            object: 'charge',
+            payment_intent: 'pi_refund_1',
+            amount_refunded: 50000,
+            refunded: true,
+        }
+        const event = buildEvent('charge.refunded', charge, 'evt_refund_1')
+
+        const res = await postWebhook(event)
+        expect(res.status).toBe(200)
+
+        await appointment.reload()
+        expect(appointment.status).toBe('COMPLETED')
+        expect(appointment.isCompleted).toBe(true)
+        expect(appointment.paymentStatus).toBe('refunded')
+        expect(appointment.payment).toBe(false)
+
+        const payment = await StripePayment.findOne({ where: { appointmentId: appointment.id } })
+        expect(payment.status).toBe('REFUNDED')
     })
 })
 

@@ -6,7 +6,7 @@ import request from 'supertest'
 import bcrypt from 'bcrypt'
 
 let app
-let User, Doctor, Appointment
+let User, Doctor, Appointment, AppointmentHistory
 
 /** Future weekday 10:00 in clinic TZ (+05:00). */
 const FUTURE_START = '2030-07-22T10:00:00+05:00'
@@ -26,12 +26,14 @@ beforeAll(async () => {
     User = (await import('../models/userModel.js')).default
     Doctor = (await import('../models/doctorModel.js')).default
     Appointment = (await import('../models/appointmentModel.js')).default
+    AppointmentHistory = (await import('../models/appointmentHistoryModel.js')).default
 
     await initServices()
     app = createApp()
 })
 
 beforeEach(async () => {
+    await AppointmentHistory.destroy({ where: {}, truncate: true })
     await Appointment.destroy({ where: {}, truncate: true })
     await Doctor.destroy({ where: {}, truncate: true })
     await User.destroy({ where: {}, truncate: true })
@@ -92,7 +94,9 @@ describe('Scheduling protection', () => {
         expect(resB.body.success).toBe(false)
         expect(resB.body.message).toMatch(/no longer available/i)
 
-        const count = await Appointment.count({ where: { docId: doctor.id, cancelled: false } })
+        const count = await Appointment.count({
+            where: { docId: doctor.id, status: ['PENDING_PAYMENT', 'CONFIRMED', 'COMPLETED'] },
+        })
         expect(count).toBe(1)
     })
 
@@ -198,7 +202,7 @@ describe('Scheduling protection', () => {
         expect(rebook.body.success).toBe(true)
 
         const active = await Appointment.count({
-            where: { docId: doctor.id, cancelled: false },
+            where: { docId: doctor.id, status: ['PENDING_PAYMENT', 'CONFIRMED', 'COMPLETED'] },
         })
         expect(active).toBe(1)
     })
@@ -285,6 +289,58 @@ describe('Scheduling protection', () => {
         expect(appt.heldStartTime).toBeTruthy()
         expect(new Date(appt.startTime).getTime()).toBe(new Date(appt.heldStartTime).getTime())
         expect(appt.status).toBe('CONFIRMED')
+    })
+
+    test('reschedule rejects completed appointments', async () => {
+        await seedUser('done@test.com')
+        const doctor = await seedDoctor()
+        const token = await loginToken('done@test.com')
+
+        const book = await request(app)
+            .post('/api/user/book-appointment')
+            .set('Authorization', `Bearer ${token}`)
+            .send({ docId: doctor.id, startTime: FUTURE_START, payMode: 'later' })
+
+        const { completeAppointment, ACTOR_TYPE } = await import('../services/appointmentStateService.js')
+        await completeAppointment(book.body.appointment.id, { actorType: ACTOR_TYPE.DOCTOR })
+
+        const res = await request(app)
+            .post('/api/user/reschedule-appointment')
+            .set('Authorization', `Bearer ${token}`)
+            .send({ appointmentId: book.body.appointment.id, newStartTime: FUTURE_START_B })
+
+        expect(res.status).toBe(400)
+        expect(res.body.code).toBe('not_reschedulable')
+    })
+
+    test('cancelled appointment releases slot for rebooking via status', async () => {
+        await seedUser('slot_user@test.com')
+        await seedUser('slot_user2@test.com')
+        const doctor = await seedDoctor()
+        const token1 = await loginToken('slot_user@test.com')
+        const token2 = await loginToken('slot_user2@test.com')
+
+        const book = await request(app)
+            .post('/api/user/book-appointment')
+            .set('Authorization', `Bearer ${token1}`)
+            .send({ docId: doctor.id, startTime: FUTURE_START, payMode: 'later' })
+
+        const cancel = await request(app)
+            .post('/api/user/cancel-appointment')
+            .set('Authorization', `Bearer ${token1}`)
+            .send({ appointmentId: book.body.appointment.id })
+        expect(cancel.body.success).toBe(true)
+
+        const appt = await Appointment.findByPk(book.body.appointment.id)
+        expect(appt.status).toBe('CANCELLED')
+        expect(appt.heldStartTime).toBeNull()
+
+        const rebook = await request(app)
+            .post('/api/user/book-appointment')
+            .set('Authorization', `Bearer ${token2}`)
+            .send({ docId: doctor.id, startTime: FUTURE_START, payMode: 'later' })
+        expect(rebook.status).toBe(200)
+        expect(rebook.body.success).toBe(true)
     })
 })
 

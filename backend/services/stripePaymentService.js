@@ -7,6 +7,11 @@ import StripePayment, {
     PAYMENT_STATUS,
     ACTIVE_PAYMENT_STATUSES,
 } from '../models/stripePaymentModel.js'
+import {
+    APPOINTMENT_STATUS,
+    ACTOR_TYPE,
+    transitionAppointment,
+} from './appointmentStateService.js'
 
 const logStripe = (level, message, meta = {}) => {
     const payload = { service: 'stripePayment', ...meta }
@@ -368,7 +373,10 @@ export const markAppointmentPaidFromCheckoutSession = async ({
             }
         }
 
-        if (appointment.cancelled) {
+        if (
+            appointment.status === APPOINTMENT_STATUS.CANCELLED ||
+            appointment.status === APPOINTMENT_STATUS.NO_SHOW
+        ) {
             logStripe('error', 'cancelled appointment received paid Stripe session — refund/reconciliation required', {
                 appointmentId: appointment.id,
                 sessionId: session.id,
@@ -431,21 +439,28 @@ export const markAppointmentPaidFromCheckoutSession = async ({
         }
 
         const paidAt = new Date()
-        const statusUpdate =
-            !appointment.status || appointment.status === 'PENDING_PAYMENT'
-                ? { status: 'CONFIRMED' }
-                : {}
-        await appointment.update(
-            {
-                payment: true,
-                paymentStatus: 'paid',
-                paidAt,
-                stripeCheckoutSessionId: session.id,
-                stripePaymentIntentId: paymentIntentIdFromSession(session),
-                ...statusUpdate,
-            },
-            { transaction }
-        )
+        const paymentFields = {
+            payment: true,
+            paymentStatus: 'paid',
+            paidAt,
+            stripeCheckoutSessionId: session.id,
+            stripePaymentIntentId: paymentIntentIdFromSession(session),
+        }
+
+        if (appointment.status === APPOINTMENT_STATUS.PENDING_PAYMENT) {
+            await transitionAppointment(appointment, APPOINTMENT_STATUS.CONFIRMED, {
+                actorType: ACTOR_TYPE.SYSTEM,
+                reason: 'Payment confirmed via Stripe',
+                metadata: { stripeEventId, eventType, sessionId: session.id },
+                extraFields: paymentFields,
+                transaction,
+                skipSlotCache: true,
+                recordRejectedAttempt: false,
+            })
+        } else {
+            // Already CONFIRMED (pay-later) or COMPLETED — payment only, no lifecycle change.
+            await appointment.update(paymentFields, { transaction })
+        }
 
         await recordStripePaymentPaid({
             appointmentId: appointment.id,
@@ -497,7 +512,9 @@ export const reconcileCheckoutSession = async (sessionId, { expectedUserId } = {
 }
 
 /**
- * Safely handle expired checkout: pending → unpaid only for the active session.
+ * Safely handle expired checkout.
+ * For PENDING_PAYMENT appointments: cancel and release the slot.
+ * For CONFIRMED (pay-later started a later checkout): reset paymentStatus to unpaid only.
  * Never downgrades paid.
  */
 export const handleCheckoutSessionExpired = async ({
@@ -547,7 +564,6 @@ export const handleCheckoutSessionExpired = async ({
         }
 
         if (appointment.paymentStatus === 'pending') {
-            await appointment.update({ paymentStatus: 'unpaid' }, { transaction })
             await StripePayment.update(
                 { status: PAYMENT_STATUS.EXPIRED, activeAppointmentId: null },
                 {
@@ -558,6 +574,24 @@ export const handleCheckoutSessionExpired = async ({
                     transaction,
                 }
             )
+
+            if (appointment.status === APPOINTMENT_STATUS.PENDING_PAYMENT) {
+                await transitionAppointment(appointment, APPOINTMENT_STATUS.CANCELLED, {
+                    actorType: ACTOR_TYPE.SYSTEM,
+                    reason: 'Checkout session expired',
+                    metadata: { stripeEventId, eventType, sessionId: session.id },
+                    extraFields: { paymentStatus: 'unpaid' },
+                    transaction,
+                    recordRejectedAttempt: false,
+                })
+                logStripe('info', 'pending-payment appointment cancelled after session expiry', {
+                    appointmentId: appointment.id,
+                    sessionId: session.id,
+                })
+                return { status: 'expired', message: 'Checkout expired; appointment cancelled' }
+            }
+
+            await appointment.update({ paymentStatus: 'unpaid' }, { transaction })
             logStripe('info', 'pending payment reset to unpaid after session expiry', {
                 appointmentId: appointment.id,
                 sessionId: session.id,
@@ -606,7 +640,6 @@ export const handleAsyncPaymentFailed = async ({
         }
 
         if (appointment.paymentStatus === 'pending') {
-            await appointment.update({ paymentStatus: 'unpaid' }, { transaction })
             await StripePayment.update(
                 { status: PAYMENT_STATUS.FAILED, activeAppointmentId: null },
                 {
@@ -617,6 +650,24 @@ export const handleAsyncPaymentFailed = async ({
                     transaction,
                 }
             )
+
+            if (appointment.status === APPOINTMENT_STATUS.PENDING_PAYMENT) {
+                await transitionAppointment(appointment, APPOINTMENT_STATUS.CANCELLED, {
+                    actorType: ACTOR_TYPE.SYSTEM,
+                    reason: 'Async payment failed',
+                    metadata: { stripeEventId, eventType, sessionId: session.id },
+                    extraFields: { paymentStatus: 'unpaid' },
+                    transaction,
+                    recordRejectedAttempt: false,
+                })
+                logStripe('warn', 'pending-payment appointment cancelled after async payment failure', {
+                    appointmentId: appointment.id,
+                    sessionId: session.id,
+                })
+                return { status: 'failed', message: 'Async payment failed; appointment cancelled' }
+            }
+
+            await appointment.update({ paymentStatus: 'unpaid' }, { transaction })
             logStripe('warn', 'async payment failed — reset to unpaid', {
                 appointmentId: appointment.id,
                 sessionId: session.id,
@@ -625,5 +676,111 @@ export const handleAsyncPaymentFailed = async ({
         }
 
         return { status: 'ignored', message: 'No pending payment to fail' }
+    })
+}
+
+/**
+ * Payment-only refund. Appointment lifecycle stays COMPLETED/CANCELLED; only
+ * StripePayment (+ appointment.paymentStatus mirror) moves to refunded.
+ */
+export const markPaymentRefunded = async ({
+    appointmentId,
+    paymentIntentId = null,
+    checkoutSessionId = null,
+    stripeEventId = null,
+    eventType = null,
+    amountRefunded = null,
+}) => {
+    return sequelize.transaction(async (transaction) => {
+        const claim = await claimWebhookEvent(stripeEventId, eventType, transaction)
+        if (claim.duplicate) {
+            return { status: 'duplicate', message: 'Event already processed' }
+        }
+
+        if (!appointmentId && !paymentIntentId && !checkoutSessionId) {
+            return { status: 'ignored', message: 'Missing refund identifiers' }
+        }
+
+        const appointment = appointmentId
+            ? await Appointment.findByPk(appointmentId, {
+                transaction,
+                lock: transaction.LOCK.UPDATE,
+            })
+            : null
+
+        const paymentWhere = paymentIntentId
+            ? { stripePaymentIntentId: paymentIntentId }
+            : checkoutSessionId
+                ? { stripeCheckoutSessionId: checkoutSessionId }
+                : { appointmentId }
+
+        const payment = await StripePayment.findOne({
+            where: paymentWhere,
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+            order: [['createdAt', 'DESC']],
+        })
+
+        if (!payment) {
+            logStripe('warn', 'refund event with no matching payment record', {
+                appointmentId,
+                paymentIntentId,
+                checkoutSessionId,
+                stripeEventId,
+            })
+            return { status: 'ignored', message: 'Payment record not found' }
+        }
+
+        if (payment.status === PAYMENT_STATUS.REFUNDED) {
+            return {
+                status: 'already_refunded',
+                message: 'Payment already refunded',
+                appointmentId: payment.appointmentId,
+                paymentStatus: 'refunded',
+            }
+        }
+
+        await payment.update(
+            {
+                status: PAYMENT_STATUS.REFUNDED,
+                activeAppointmentId: null,
+            },
+            { transaction }
+        )
+
+        const lockedAppointment =
+            appointment ||
+            (await Appointment.findByPk(payment.appointmentId, {
+                transaction,
+                lock: transaction.LOCK.UPDATE,
+            }))
+
+        if (lockedAppointment) {
+            // Payment-only: do not change appointment.status.
+            await lockedAppointment.update(
+                {
+                    paymentStatus: 'refunded',
+                    payment: false,
+                },
+                { transaction }
+            )
+        }
+
+        logStripe('info', 'payment marked refunded', {
+            appointmentId: payment.appointmentId,
+            paymentId: payment.id,
+            stripeEventId,
+            eventType,
+            amountRefunded,
+            appointmentStatus: lockedAppointment?.status,
+        })
+
+        return {
+            status: 'refunded',
+            message: 'Payment refunded',
+            appointmentId: payment.appointmentId,
+            appointmentStatus: lockedAppointment?.status,
+            paymentStatus: 'refunded',
+        }
     })
 }

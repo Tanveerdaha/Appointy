@@ -9,6 +9,9 @@ import {
     getCurrency,
     getExpectedAmountCents,
 } from './stripePaymentService.js'
+import {
+    APPOINTMENT_STATUS,
+} from './appointmentStateService.js'
 
 const logPayment = (level, message, meta = {}) => {
     const payload = { service: 'paymentService', ...meta }
@@ -70,7 +73,15 @@ export const createAppointmentPayment = async (
                 lock: transaction.LOCK.UPDATE,
             })
 
-            if (!appointment || appointment.cancelled) {
+            if (!appointment) {
+                return { ok: false, code: 'appointment_not_found', message: 'Appointment Cancelled or not found' }
+            }
+
+            if (
+                appointment.status === APPOINTMENT_STATUS.CANCELLED ||
+                appointment.status === APPOINTMENT_STATUS.NO_SHOW ||
+                appointment.status === APPOINTMENT_STATUS.COMPLETED
+            ) {
                 return { ok: false, code: 'appointment_not_found', message: 'Appointment Cancelled or not found' }
             }
 

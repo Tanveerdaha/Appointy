@@ -14,7 +14,7 @@ const STRIPE_SECRET = 'sk_test_unit_stripe_secret'
 const stripe = new Stripe(STRIPE_SECRET)
 
 let app
-let User, Doctor, Appointment, StripePayment, StripeWebhookEvent
+let User, Doctor, Appointment, StripePayment, StripeWebhookEvent, AppointmentHistory
 let createAppointmentPayment, PAYMENT_STATUS, ACTIVE_PAYMENT_STATUSES
 
 beforeAll(async () => {
@@ -33,6 +33,7 @@ beforeAll(async () => {
     User = (await import('../models/userModel.js')).default
     Doctor = (await import('../models/doctorModel.js')).default
     Appointment = (await import('../models/appointmentModel.js')).default
+    AppointmentHistory = (await import('../models/appointmentHistoryModel.js')).default
     StripeWebhookEvent = (await import('../models/stripeWebhookEventModel.js')).default
     const paymentModel = await import('../models/stripePaymentModel.js')
     StripePayment = paymentModel.default
@@ -47,6 +48,7 @@ beforeAll(async () => {
 beforeEach(async () => {
     await StripePayment.destroy({ where: {}, truncate: true })
     await StripeWebhookEvent.destroy({ where: {}, truncate: true })
+    await AppointmentHistory.destroy({ where: {}, truncate: true })
     await Appointment.destroy({ where: {}, truncate: true })
     await Doctor.destroy({ where: {}, truncate: true })
     await User.destroy({ where: {}, truncate: true })
@@ -91,6 +93,7 @@ const seedAppointment = async ({
         startTime,
         heldStartTime: cancelled ? null : startTime,
         status: cancelled ? 'CANCELLED' : paymentStatus === 'pending' ? 'PENDING_PAYMENT' : 'CONFIRMED',
+        statusChangedAt: new Date(),
         date: Date.now(),
         payment,
         paymentStatus,
