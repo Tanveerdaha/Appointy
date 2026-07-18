@@ -1,9 +1,11 @@
 import sequelize from '../config/mysql.js'
 import Appointment from '../models/appointmentModel.js'
 import { lockDoctorForUpdate } from './lockDoctor.js'
+import { parseLegacySlot, toLegacySlotFields } from './slotTime.js'
 
 /**
  * Mark appointment cancelled and release the doctor slot under a row lock.
+ * Clears heldStartTime so the unique doctor/slot index allows rebooking.
  */
 export const cancelAppointmentAndReleaseSlot = async (
   appointment,
@@ -12,16 +14,25 @@ export const cancelAppointmentAndReleaseSlot = async (
   const transaction = await sequelize.transaction()
   try {
     await Appointment.update(
-      { cancelled: true, ...extraAppointmentFields },
+      {
+        cancelled: true,
+        status: 'CANCELLED',
+        heldStartTime: null,
+        ...extraAppointmentFields,
+      },
       { where: { id: appointment.id }, transaction }
     )
 
     const doctor = await lockDoctorForUpdate(appointment.docId, transaction)
     if (doctor) {
+      const legacy = appointment.startTime
+        ? toLegacySlotFields(new Date(appointment.startTime))
+        : { slotDate: appointment.slotDate, slotTime: appointment.slotTime }
       const slots_booked = { ...(doctor.slots_booked || {}) }
-      const { slotDate, slotTime } = appointment
-      if (slots_booked[slotDate]) {
-        slots_booked[slotDate] = slots_booked[slotDate].filter((t) => t !== slotTime)
+      if (slots_booked[legacy.slotDate]) {
+        slots_booked[legacy.slotDate] = slots_booked[legacy.slotDate].filter(
+          (t) => t !== legacy.slotTime
+        )
       }
       await doctor.update({ slots_booked }, { transaction })
     }
@@ -46,4 +57,9 @@ export const toSafeDoctorSnapshot = (doctor) => {
     fees: data.fees,
     address: data.address,
   }
+}
+
+/** Best-effort startTime from legacy fields (used by migration repair / seeds). */
+export const legacySlotToStartTime = (slotDate, slotTime, fallback = new Date()) => {
+  return parseLegacySlot(slotDate, slotTime) || fallback
 }

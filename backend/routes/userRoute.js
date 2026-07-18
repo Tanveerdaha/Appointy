@@ -6,6 +6,7 @@ import {
 } from '../controllers/userController.js';
 import authUser from '../middlewares/authUser.js';
 import upload from '../middlewares/multer.js';
+import { validateBookAppointmentBody, validateRescheduleBody } from '../middlewares/validateAppointment.js';
 
 const userRouter = express.Router();
 
@@ -16,12 +17,12 @@ userRouter.post("/reset-password", resetPassword)
 userRouter.post("/contact", contactUs)
 userRouter.get("/get-profile", authUser, getProfile)
 userRouter.post("/update-profile", authUser, upload.single('image'), updateProfile)
-userRouter.post("/book-appointment", authUser, bookAppointment)
+userRouter.post("/book-appointment", authUser, validateBookAppointmentBody, bookAppointment)
 userRouter.get("/appointments", authUser, listAppointment)
 userRouter.post("/cancel-appointment", authUser, cancelAppointment)
 userRouter.post("/payment-stripe", authUser, paymentStripe)
 userRouter.get("/payment-status/:appointmentId", authUser, paymentStatus)
 userRouter.post("/verify-stripe", authUser, verifyStripe)
-userRouter.post("/reschedule-appointment", authUser, rescheduleAppointment)
+userRouter.post("/reschedule-appointment", authUser, validateRescheduleBody, rescheduleAppointment)
 
 export default userRouter;

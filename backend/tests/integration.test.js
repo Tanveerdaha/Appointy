@@ -73,10 +73,16 @@ describe('Appointments', () => {
         const res = await request(app)
             .post('/api/user/book-appointment')
             .set('Authorization', `Bearer ${loginRes.body.token}`)
-            .send({ docId: doctor.id, slotDate: '15_7_2026', slotTime: '10:00 AM', payMode: 'later' })
+            .send({
+                docId: doctor.id,
+                startTime: '2030-07-15T10:00:00+05:00',
+                payMode: 'later',
+            })
 
         expect(res.status).toBe(200)
         expect(res.body.success).toBe(true)
+        expect(res.body.appointment.startTime).toBeDefined()
+        expect(res.body.appointment.status).toBe('CONFIRMED')
     })
 })
 

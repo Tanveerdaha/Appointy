@@ -2,13 +2,10 @@ import validator from 'validator'
 import bcrypt from 'bcrypt'
 import crypto from 'crypto'
 import User from "../models/userModel.js";
-import Doctor from "../models/doctorModel.js";
 import Appointment from "../models/appointmentModel.js";
 import jwt from "jsonwebtoken";
 import { uploadImage } from '../utils/uploadImage.js';
-import sequelize from '../config/mysql.js';
-import { lockDoctorForUpdate } from '../utils/lockDoctor.js';
-import { cancelAppointmentAndReleaseSlot, toSafeDoctorSnapshot } from '../utils/appointmentSlots.js';
+import { cancelAppointmentAndReleaseSlot } from '../utils/appointmentSlots.js';
 import { notifyAppointmentBooked, notifyAppointmentCancelled, notifyPasswordReset } from '../services/notificationService.js';
 import {
     reconcileCheckoutSession,
@@ -17,6 +14,11 @@ import {
     createAppointmentPayment,
     getAppointmentPaymentStatus,
 } from '../services/paymentService.js'
+import {
+    createAppointment,
+    rescheduleAppointment as rescheduleAppointmentService,
+    SchedulingError,
+} from '../services/appointmentService.js'
 
 const JWT_OPTIONS = { expiresIn: '7d' }
 
@@ -140,67 +142,18 @@ const updateProfile = async (req, res) => {
 }
 
 const bookAppointment = async (req, res) => {
-    const transaction = await sequelize.transaction()
-    let committed = false
     try {
         const userId = req.userId
-        const { docId, slotDate, slotTime, payMode = 'later' } = req.body
+        const { docId, startTime, slotDate, slotTime, payMode = 'later' } = req.body
 
-        if (!docId || !slotDate || !slotTime) {
-            await transaction.rollback()
-            return res.status(400).json({ success: false, message: 'Missing booking details' })
-        }
-
-        if (!['now', 'later'].includes(payMode)) {
-            await transaction.rollback()
-            return res.status(400).json({ success: false, message: 'Invalid payMode. Use "now" or "later".' })
-        }
-
-        const docData = await lockDoctorForUpdate(docId, transaction)
-
-        if (!docData || !docData.available) {
-            await transaction.rollback()
-            return res.status(400).json({ success: false, message: 'Doctor Not Available' })
-        }
-
-        let slots_booked = docData.slots_booked || {}
-
-        if (slots_booked[slotDate]?.includes(slotTime)) {
-            await transaction.rollback()
-            return res.status(409).json({ success: false, message: 'Slot Not Available' })
-        }
-
-        if (slots_booked[slotDate]) {
-            slots_booked[slotDate].push(slotTime)
-        } else {
-            slots_booked[slotDate] = [slotTime]
-        }
-
-        const userData = await User.findByPk(userId, {
-            attributes: { exclude: ['password', 'resetToken', 'resetTokenExpiry'] },
-            transaction
-        })
-
-        const safeDocData = toSafeDoctorSnapshot(docData)
-
-        const paymentStatus = payMode === 'now' ? 'pending' : 'unpaid'
-
-        const appointment = await Appointment.create({
+        const appointment = await createAppointment({
+            doctorId: docId,
             userId,
-            docId,
-            userData: userData.toJSON(),
-            docData: safeDocData,
-            amount: docData.fees,
-            slotTime,
+            startTime,
             slotDate,
-            date: Date.now(),
-            payment: false,
-            paymentStatus,
-        }, { transaction })
-
-        await Doctor.update({ slots_booked }, { where: { id: docId }, transaction })
-        await transaction.commit()
-        committed = true
+            slotTime,
+            payMode,
+        })
 
         const user = await User.findByPk(userId)
         notifyAppointmentBooked(appointment, user?.email).catch(console.error)
@@ -230,10 +183,9 @@ const bookAppointment = async (req, res) => {
         }
 
         res.json(response)
-
     } catch (error) {
-        if (!committed) {
-            await transaction.rollback()
+        if (error instanceof SchedulingError) {
+            return res.status(error.statusCode).json({ success: false, message: error.message, code: error.code })
         }
         console.log(error)
         res.status(500).json({ success: false, message: error.message })
@@ -259,7 +211,7 @@ const cancelAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Paid appointments cannot be cancelled online. Contact support for refund.' })
         }
 
-        if (appointmentData.cancelled) {
+        if (appointmentData.cancelled || appointmentData.status === 'CANCELLED') {
             return res.status(400).json({ success: false, message: 'Appointment already cancelled' })
         }
 
@@ -413,72 +365,22 @@ const verifyStripe = async (req, res) => {
 }
 
 const rescheduleAppointment = async (req, res) => {
-    const transaction = await sequelize.transaction()
-    let committed = false
     try {
         const userId = req.userId
-        const { appointmentId, newSlotDate, newSlotTime } = req.body
+        const { appointmentId, newStartTime, newSlotDate, newSlotTime } = req.body
 
-        if (!appointmentId || !newSlotDate || !newSlotTime) {
-            await transaction.rollback()
-            return res.status(400).json({ success: false, message: 'Missing reschedule details' })
-        }
+        await rescheduleAppointmentService({
+            appointmentId,
+            userId,
+            newStartTime,
+            newSlotDate,
+            newSlotTime,
+        })
 
-        const appointment = await Appointment.findByPk(appointmentId, { transaction })
-
-        if (!appointment) {
-            await transaction.rollback()
-            return res.status(404).json({ success: false, message: 'Appointment not found' })
-        }
-
-        if (appointment.userId !== userId) {
-            await transaction.rollback()
-            return res.status(403).json({ success: false, message: 'Unauthorized action' })
-        }
-
-        if (appointment.cancelled || appointment.isCompleted) {
-            await transaction.rollback()
-            return res.status(400).json({ success: false, message: 'Cannot reschedule this appointment' })
-        }
-
-        const { docId, slotDate: oldSlotDate, slotTime: oldSlotTime } = appointment
-
-        const doctorData = await lockDoctorForUpdate(docId, transaction)
-
-        if (!doctorData || !doctorData.available) {
-            await transaction.rollback()
-            return res.status(400).json({ success: false, message: 'Doctor Not Available' })
-        }
-
-        let slots_booked = doctorData.slots_booked || {}
-
-        if (slots_booked[newSlotDate]?.includes(newSlotTime)) {
-            await transaction.rollback()
-            return res.status(409).json({ success: false, message: 'New slot not available' })
-        }
-
-        if (slots_booked[oldSlotDate]) {
-            slots_booked[oldSlotDate] = slots_booked[oldSlotDate].filter((e) => e !== oldSlotTime)
-        }
-
-        if (slots_booked[newSlotDate]) {
-            slots_booked[newSlotDate].push(newSlotTime)
-        } else {
-            slots_booked[newSlotDate] = [newSlotTime]
-        }
-
-        await Appointment.update(
-            { slotDate: newSlotDate, slotTime: newSlotTime },
-            { where: { id: appointmentId }, transaction }
-        )
-        await Doctor.update({ slots_booked }, { where: { id: docId }, transaction })
-
-        await transaction.commit()
-        committed = true
         res.json({ success: true, message: 'Appointment Rescheduled' })
     } catch (error) {
-        if (!committed) {
-            await transaction.rollback()
+        if (error instanceof SchedulingError) {
+            return res.status(error.statusCode).json({ success: false, message: error.message, code: error.code })
         }
         console.log(error)
         res.status(500).json({ success: false, message: error.message })

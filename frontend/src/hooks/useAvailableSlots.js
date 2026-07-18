@@ -2,6 +2,19 @@ import { useEffect, useState } from 'react'
 
 const daysOfWeek = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
 
+/** ISO-8601 with numeric offset from the Date's local timezone. */
+export const toOffsetISOString = (date) => {
+  const pad = (n) => String(n).padStart(2, '0')
+  const tzo = -date.getTimezoneOffset()
+  const sign = tzo >= 0 ? '+' : '-'
+  const abs = Math.abs(tzo)
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}` +
+    `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
+  )
+}
+
 export const useAvailableSlots = (docInfo) => {
   const [docSlots, setDocSlots] = useState([])
 
@@ -47,10 +60,12 @@ export const useAvailableSlots = (docInfo) => {
           !slots_booked[slotDate] || !slots_booked[slotDate].includes(formattedTime)
 
         if (isSlotAvailable) {
+          const datetime = new Date(currentDate)
           timeSlots.push({
-            datetime: new Date(currentDate),
+            datetime,
             time: formattedTime,
             slotDate,
+            startTime: toOffsetISOString(datetime),
           })
         }
 

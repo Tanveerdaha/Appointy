@@ -15,10 +15,34 @@ const Appointment = sequelize.define('Appointment', {
     type: DataTypes.UUID,
     allowNull: false,
   },
+  /** Canonical absolute start of the appointment (source of truth). */
+  startTime: {
+    type: DataTypes.DATE,
+    allowNull: false,
+  },
+  /**
+   * Equals startTime while the slot is held; NULL when cancelled/refunded.
+   * UNIQUE(docId, heldStartTime) enforces one active booking per doctor/time.
+   */
+  heldStartTime: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
+  /**
+   * Scheduling lifecycle. Availability uses SLOT_HOLDING_STATUSES in appointmentService.
+   * Kept in sync with cancelled / isCompleted for backward compatibility.
+   */
+  status: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    defaultValue: 'CONFIRMED',
+  },
+  /** @deprecated Prefer startTime — kept for display/back-compat. */
   slotDate: {
     type: DataTypes.STRING,
     allowNull: false,
   },
+  /** @deprecated Prefer startTime — kept for display/back-compat. */
   slotTime: {
     type: DataTypes.STRING,
     allowNull: false,
@@ -76,6 +100,13 @@ const Appointment = sequelize.define('Appointment', {
     { fields: ['paymentStatus'] },
     { fields: ['stripeCheckoutSessionId'] },
     { fields: ['stripePaymentIntentId'] },
+    { fields: ['status'] },
+    { fields: ['startTime'] },
+    {
+      unique: true,
+      fields: ['docId', 'heldStartTime'],
+      name: 'unique_doctor_slot',
+    },
   ],
 });
 

@@ -18,7 +18,7 @@ const Appointment = () => {
   const [docInfo, setDocInfo] = useState(null)
   const [loading, setLoading] = useState(true)
   const [slotIndex, setSlotIndex] = useState(0)
-  const [slotTime, setSlotTime] = useState('')
+  const [selectedSlot, setSelectedSlot] = useState(null)
   const [payMode, setPayMode] = useState('later')
   const [booking, setBooking] = useState(false)
 
@@ -30,6 +30,10 @@ const Appointment = () => {
     setDocInfo(doc ? { ...doc, slots_booked: doc.slots_booked || {} } : null)
     setLoading(false)
   }, [doctors, doctorsLoaded, docId])
+
+  useEffect(() => {
+    setSelectedSlot(null)
+  }, [slotIndex, docId])
 
   const handlePayment = (sessionUrl) => {
     try {
@@ -50,26 +54,16 @@ const Appointment = () => {
       return
     }
 
-    if (!slotTime) {
+    if (!selectedSlot?.startTime) {
       toast.warning('Please select a time slot')
       return
     }
-
-    const selectedDay = docSlots[slotIndex]
-    if (!selectedDay?.length) {
-      toast.warning('No slots available for the selected day')
-      return
-    }
-
-    const date = selectedDay[0].datetime
-    const slotDate = `${date.getDate()}_${date.getMonth() + 1}_${date.getFullYear()}`
 
     try {
       setBooking(true)
       const { data } = await api.post('/api/user/book-appointment', {
         docId,
-        slotDate,
-        slotTime,
+        startTime: selectedSlot.startTime,
         payMode,
       })
 
@@ -154,9 +148,9 @@ const Appointment = () => {
           <div className='flex items-center gap-3 w-full overflow-x-scroll mt-4'>
             {docSlots[slotIndex]?.map((item, index) => (
               <p
-                onClick={() => setSlotTime(item.time)}
+                onClick={() => setSelectedSlot(item)}
                 key={index}
-                className={`text-sm font-light flex-shrink-0 px-5 py-2 rounded-full cursor-pointer ${item.time === slotTime ? 'bg-primary text-white' : 'text-[#949494] border border-[#B4B4B4]'}`}
+                className={`text-sm font-light flex-shrink-0 px-5 py-2 rounded-full cursor-pointer ${item.startTime === selectedSlot?.startTime ? 'bg-primary text-white' : 'text-[#949494] border border-[#B4B4B4]'}`}
               >
                 {item.time.toLowerCase()}
               </p>
@@ -176,8 +170,8 @@ const Appointment = () => {
 
           <button
             onClick={bookAppointment}
-            disabled={!slotTime || booking}
-            className={`text-white text-sm font-light px-20 py-3 rounded-full my-6 ${slotTime && !booking ? 'bg-primary' : 'bg-gray-400 cursor-not-allowed'}`}
+            disabled={!selectedSlot || booking}
+            className={`text-white text-sm font-light px-20 py-3 rounded-full my-6 ${selectedSlot && !booking ? 'bg-primary' : 'bg-gray-400 cursor-not-allowed'}`}
           >
             {booking ? 'Booking...' : payMode === 'now' ? 'Book & Pay Now' : 'Book an appointment'}
           </button>

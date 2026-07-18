@@ -3,22 +3,17 @@ import useAvailableSlots from '../hooks/useAvailableSlots'
 
 const RescheduleModal = ({ appointment, doctors, onClose, onConfirm }) => {
   const [slotIndex, setSlotIndex] = useState(0)
-  const [slotTime, setSlotTime] = useState('')
+  const [selectedSlot, setSelectedSlot] = useState(null)
 
   const docInfo = doctors.find((doc) => (doc.id || doc._id) === appointment.docId)
   const { docSlots, daysOfWeek } = useAvailableSlots(docInfo)
 
   const handleConfirm = () => {
-    const selectedDay = docSlots[slotIndex]
-    if (!slotTime || !selectedDay?.length) return
-
-    const selectedSlot = selectedDay.find((s) => s.time === slotTime)
-    if (!selectedSlot) return
+    if (!selectedSlot?.startTime) return
 
     onConfirm({
       appointmentId: appointment.id || appointment._id,
-      newSlotDate: selectedSlot.slotDate,
-      newSlotTime: slotTime,
+      newStartTime: selectedSlot.startTime,
     })
   }
 
@@ -41,7 +36,7 @@ const RescheduleModal = ({ appointment, doctors, onClose, onConfirm }) => {
         <div className="flex gap-3 overflow-x-auto mt-2">
           {docSlots.map((item, index) => (
             <div
-              onClick={() => { setSlotIndex(index); setSlotTime('') }}
+              onClick={() => { setSlotIndex(index); setSelectedSlot(null) }}
               key={index}
               className={`text-center py-4 min-w-16 rounded-full cursor-pointer ${slotIndex === index ? 'bg-primary text-white' : 'border border-[#DDDDDD]'}`}
             >
@@ -54,9 +49,9 @@ const RescheduleModal = ({ appointment, doctors, onClose, onConfirm }) => {
         <div className="flex gap-2 flex-wrap mt-4">
           {docSlots[slotIndex]?.map((item, index) => (
             <p
-              onClick={() => setSlotTime(item.time)}
+              onClick={() => setSelectedSlot(item)}
               key={index}
-              className={`text-sm px-4 py-2 rounded-full cursor-pointer ${item.time === slotTime ? 'bg-primary text-white' : 'border border-gray-300 text-gray-600'}`}
+              className={`text-sm px-4 py-2 rounded-full cursor-pointer ${item.startTime === selectedSlot?.startTime ? 'bg-primary text-white' : 'border border-gray-300 text-gray-600'}`}
             >
               {item.time.toLowerCase()}
             </p>
@@ -67,8 +62,8 @@ const RescheduleModal = ({ appointment, doctors, onClose, onConfirm }) => {
           <button onClick={onClose} className="flex-1 py-2 border rounded">Cancel</button>
           <button
             onClick={handleConfirm}
-            disabled={!slotTime}
-            className={`flex-1 py-2 rounded text-white ${slotTime ? 'bg-primary' : 'bg-gray-400 cursor-not-allowed'}`}
+            disabled={!selectedSlot}
+            className={`flex-1 py-2 rounded text-white ${selectedSlot ? 'bg-primary' : 'bg-gray-400 cursor-not-allowed'}`}
           >
             Confirm
           </button>

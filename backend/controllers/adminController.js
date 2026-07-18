@@ -184,7 +184,10 @@ const appointmentComplete = async (req, res) => {
             return res.json({ success: false, message: 'Cannot complete a cancelled appointment' })
         }
 
-        await Appointment.update({ isCompleted: true }, { where: { id: appointmentId } })
+        await Appointment.update(
+            { isCompleted: true, status: 'COMPLETED' },
+            { where: { id: appointmentId } }
+        )
         res.json({ success: true, message: 'Appointment Completed' })
     } catch (error) {
         console.log(error)

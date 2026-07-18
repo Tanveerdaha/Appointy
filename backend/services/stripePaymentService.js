@@ -431,6 +431,10 @@ export const markAppointmentPaidFromCheckoutSession = async ({
         }
 
         const paidAt = new Date()
+        const statusUpdate =
+            !appointment.status || appointment.status === 'PENDING_PAYMENT'
+                ? { status: 'CONFIRMED' }
+                : {}
         await appointment.update(
             {
                 payment: true,
@@ -438,6 +442,7 @@ export const markAppointmentPaidFromCheckoutSession = async ({
                 paidAt,
                 stripeCheckoutSessionId: session.id,
                 stripePaymentIntentId: paymentIntentIdFromSession(session),
+                ...statusUpdate,
             },
             { transaction }
         )

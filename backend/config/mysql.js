@@ -40,11 +40,16 @@ const sequelize =
           process.env.SQLITE_STORAGE ||
           path.join(__dirname, '..', 'data', 'appointy.sqlite'),
         logging: false,
+        pool: { max: 1, min: 0, idle: 10000 },
+        retry: { max: 3 },
       });
 
 export const connectDB = async () => {
   try {
     await sequelize.authenticate();
+    if (dialect === 'sqlite') {
+      await sequelize.query('PRAGMA busy_timeout = 5000');
+    }
     console.log(
       dialect === 'mysql' ? 'MySQL Database Connected' : 'SQLite Database Connected'
     );

@@ -75,7 +75,10 @@ const appointmentComplete = async (req, res) => {
       return res.status(403).json({ success: false, message: "Invalid doctor or appointment" });
     }
 
-    await Appointment.update({ isCompleted: true }, { where: { id: appointmentId } });
+    await Appointment.update(
+      { isCompleted: true, status: 'COMPLETED' },
+      { where: { id: appointmentId } }
+    );
     res.json({ success: true, message: "Appointment Completed" });
   } catch (error) {
     console.error(error);

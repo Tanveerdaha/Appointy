@@ -79,6 +79,7 @@ const seedAppointment = async ({
         date: Date.now(),
         slots_booked: {},
     })
+    const startTime = new Date('2026-07-18T10:00:00+05:00')
     const appointment = await Appointment.create({
         userId: user.id,
         docId: doctor.id,
@@ -87,6 +88,9 @@ const seedAppointment = async ({
         amount,
         slotTime: '10:00 AM',
         slotDate: '18_7_2026',
+        startTime,
+        heldStartTime: cancelled ? null : startTime,
+        status: cancelled ? 'CANCELLED' : paymentStatus === 'pending' ? 'PENDING_PAYMENT' : 'CONFIRMED',
         date: Date.now(),
         payment,
         paymentStatus,
