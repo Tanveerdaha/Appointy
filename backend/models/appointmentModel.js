@@ -35,7 +35,7 @@ const Appointment = sequelize.define('Appointment', {
   /** Canonical absolute start of the appointment (source of truth). */
   startTime: {
     type: DataTypes.DATE,
-    allowNull: false,
+    allowNull: true,
   },
   /**
    * Equals startTime while the slot is held; NULL when cancelled/no-show.
