@@ -8,7 +8,8 @@
   "main": "server.js",
   "scripts": {
     "test": "NODE_OPTIONS=--experimental-vm-modules jest tests/unit.test.js --runInBand",
-    "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest tests/integration.test.js --runInBand",
+    "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest tests/integration.test.js tests/stripeWebhook.test.js tests/paymentIdempotency.test.js --runInBand",
+    "test:stripe": "NODE_OPTIONS=--experimental-vm-modules jest tests/stripeWebhook.test.js --runInBand",
     "test:all": "NODE_OPTIONS=--experimental-vm-modules jest --runInBand",
     "start": "node server.js",
     "server": "nodemon server.js",

@@ -51,6 +51,18 @@ const Appointment = sequelize.define('Appointment', {
     type: DataTypes.STRING,
     defaultValue: 'unpaid',
   },
+  stripeCheckoutSessionId: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+  stripePaymentIntentId: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+  paidAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
   isCompleted: {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
@@ -62,6 +74,8 @@ const Appointment = sequelize.define('Appointment', {
     { fields: ['userId'] },
     { fields: ['docId'] },
     { fields: ['paymentStatus'] },
+    { fields: ['stripeCheckoutSessionId'] },
+    { fields: ['stripePaymentIntentId'] },
   ],
 });
 

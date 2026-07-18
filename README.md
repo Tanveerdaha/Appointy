@@ -51,7 +51,7 @@ cp example.env backend/.env
 Edit `.env` and `backend/.env` and set your real keys:
 
 - `CLOUDINARY_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`
-- `STRIPE_SECRET_KEY`
+- `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
 - `JWT_SECRET` (change from the placeholder)
 
 > For the API container, Compose overrides `MYSQL_HOST` to `mysql` (Docker DNS). Keep `MYSQL_HOST=localhost` in `backend/.env` for local `npm run server` against Docker MySQL on port 3306.
@@ -150,7 +150,8 @@ Root template: [`example.env`](example.env) (copy to `.env` and `backend/.env`).
 | `JWT_SECRET` | Signing secret for tokens |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Admin panel credentials |
 | `CLOUDINARY_*` | Required for image uploads |
-| `STRIPE_SECRET_KEY` | Stripe Checkout |
+| `STRIPE_SECRET_KEY` | Stripe Checkout API secret (server only) |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret (`whsec_...`) |
 | `CURRENCY` | e.g. `pkr` |
 | `FRONTEND_URL` | Stripe return URLs + password-reset links |
 | `ALLOWED_ORIGINS` | CORS allowlist (comma-separated) |
@@ -175,9 +176,54 @@ Appointy/
 
 ## Payments
 
-- Stripe Checkout is the online payment gateway
-- Patient can book with **pay now** or **pay later**
-- After Checkout, return to My Appointments; the API verifies the Stripe session and marks the appointment paid
+Stripe Checkout is the online payment gateway. **Stripe webhooks are the authoritative source of truth** for payment status; the browser redirect only refreshes UX.
+
+### Payment lifecycle
+
+```text
+unpaid → (start Checkout) → pending → (checkout.session.completed webhook) → paid
+```
+
+1. Patient books with **pay now** or pays later via **Pay with Stripe**
+2. Backend creates a Checkout Session and stores `stripeCheckoutSessionId` (`paymentStatus = pending`)
+3. Patient pays on Stripe
+4. Stripe sends a signed webhook to `POST /api/webhooks/stripe`
+5. Backend verifies the signature, validates metadata/amount/currency, and marks the appointment paid
+6. If the browser also returns to My Appointments, `POST /api/user/verify-stripe` reconciles status for immediate UX (same service; not required for correctness)
+
+### Local webhook testing (Stripe CLI)
+
+```bash
+# Terminal A — API
+cd backend && npm run server
+
+# Terminal B — forward webhooks
+stripe listen --forward-to localhost:4000/api/webhooks/stripe
+```
+
+Copy the CLI `whsec_...` value into `backend/.env` as `STRIPE_WEBHOOK_SECRET`, restart the API, then complete a test Checkout. Closing the browser after payment should still leave the appointment **paid** once the webhook is delivered.
+
+Dashboard production webhooks should point to:
+
+```text
+https://<your-api-host>/api/webhooks/stripe
+```
+
+Subscribe at least to `checkout.session.completed` (also handled: `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`).
+
+### Schema / migrations
+
+Payment tracing fields (`stripeCheckoutSessionId`, `stripePaymentIntentId`, `paidAt`) and the `stripe_webhook_events` idempotency table are in:
+
+```text
+backend/migrations/20260718000001-stripe-payment-reliability.cjs
+```
+
+For production, prefer `USE_MIGRATIONS=true` and:
+
+```bash
+cd backend && npm run db:migrate
+```
 
 ## Images
 
@@ -187,6 +233,7 @@ Appointy/
 ## Production notes
 
 - Set strong `JWT_SECRET` and `ADMIN_PASSWORD`; never ship placeholder Stripe/Cloudinary keys
+- Configure `STRIPE_WEBHOOK_SECRET` and expose `POST /api/webhooks/stripe` publicly (signature-authenticated; no JWT)
 - Prefer `USE_MIGRATIONS=true` and `npm run db:migrate` in `backend/` for schema changes
 - Compose sets `NODE_ENV=production` on the API image; schema sync uses `alter: false` in production
 - Rebuild frontend/admin images after changing `VITE_*` values (`docker compose up --build`)
@@ -196,7 +243,8 @@ Appointy/
 
 ```bash
 cd backend && npm test              # unit
-cd backend && npm run test:integration
+cd backend && npm run test:integration  # includes Stripe webhook tests
+cd backend && npm run test:stripe       # Stripe webhook suite only
 cd frontend && npm test             # Vitest
 cd frontend && npm run lint
 cd admin && npm run lint

@@ -55,10 +55,16 @@ const MyAppointments = () => {
   }
 
   const appointmentStripe = async (appointmentId) => {
+    // Guard against double-clicks / concurrent requests from this tab.
+    if (payingId) return
     try {
       setPayingId(appointmentId)
       const { data } = await api.post('/api/user/payment-stripe', { appointmentId })
       if (data.success && data.sessionUrl) {
+        if (data.existingPayment) {
+          toast.info('Payment already started. Redirecting...')
+        }
+        // Keep the button disabled through the redirect (do not reset payingId).
         redirectToStripeCheckout(data.sessionUrl)
       } else {
         toast.error(data.message || 'Unable to start Stripe checkout')
@@ -106,15 +112,19 @@ const MyAppointments = () => {
 
     const confirmPayment = async () => {
       try {
+        toast.info('Confirming payment...')
         const result = await verifyStripePayment(null, null, sessionId)
         if (result.success) {
-          toast.success(result.message)
+          toast.success(result.message || 'Payment successful')
           getUserAppointments()
         } else {
           toast.error(result.message)
+          // Webhook may still finalize payment — refresh list for current status.
+          getUserAppointments()
         }
       } catch (error) {
         toast.error(error.response?.data?.message || error.message)
+        getUserAppointments()
       } finally {
         setSearchParams({})
       }
@@ -168,7 +178,7 @@ const MyAppointments = () => {
                       disabled={payingId === apptId}
                       className='text-[#696969] sm:min-w-48 py-2 border rounded hover:bg-primary hover:text-white transition-all duration-300 disabled:opacity-60'
                     >
-                      {payingId === apptId ? 'Redirecting...' : 'Pay with Stripe'}
+                      {payingId === apptId ? 'Creating payment...' : 'Pay with Stripe'}
                     </button>
                   )}
                   {!item.cancelled && status === 'paid' && !item.isCompleted && (

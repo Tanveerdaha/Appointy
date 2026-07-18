@@ -5,50 +5,20 @@ import User from "../models/userModel.js";
 import Doctor from "../models/doctorModel.js";
 import Appointment from "../models/appointmentModel.js";
 import jwt from "jsonwebtoken";
-import Stripe from 'stripe';
 import { uploadImage } from '../utils/uploadImage.js';
 import sequelize from '../config/mysql.js';
 import { lockDoctorForUpdate } from '../utils/lockDoctor.js';
 import { cancelAppointmentAndReleaseSlot, toSafeDoctorSnapshot } from '../utils/appointmentSlots.js';
 import { notifyAppointmentBooked, notifyAppointmentCancelled, notifyPasswordReset } from '../services/notificationService.js';
+import {
+    reconcileCheckoutSession,
+} from '../services/stripePaymentService.js'
+import {
+    createAppointmentPayment,
+    getAppointmentPaymentStatus,
+} from '../services/paymentService.js'
 
 const JWT_OPTIONS = { expiresIn: '7d' }
-
-const getStripe = () => {
-    if (!process.env.STRIPE_SECRET_KEY) {
-        throw new Error('Stripe credentials not configured')
-    }
-    return new Stripe(process.env.STRIPE_SECRET_KEY)
-}
-
-const createStripeCheckoutSession = async (appointment, userId) => {
-    const stripe = getStripe()
-    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '')
-    const currency = (process.env.CURRENCY || 'pkr').toLowerCase()
-    const amount = Math.round(Number(appointment.amount) * 100)
-
-    return stripe.checkout.sessions.create({
-        mode: 'payment',
-        payment_method_types: ['card'],
-        line_items: [{
-            quantity: 1,
-            price_data: {
-                currency,
-                unit_amount: amount,
-                product_data: {
-                    name: 'Doctor Appointment',
-                    description: `Appointment #${appointment.id}`,
-                },
-            },
-        }],
-        metadata: {
-            appointmentId: String(appointment.id),
-            userId: String(userId),
-        },
-        success_url: `${frontendUrl}/my-appointments?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${frontendUrl}/my-appointments?canceled=1`,
-    })
-}
 
 const syncPaymentFields = (appointment) => {
     const status = appointment.paymentStatus || (appointment.payment ? 'paid' : 'unpaid')
@@ -171,6 +141,7 @@ const updateProfile = async (req, res) => {
 
 const bookAppointment = async (req, res) => {
     const transaction = await sequelize.transaction()
+    let committed = false
     try {
         const userId = req.userId
         const { docId, slotDate, slotTime, payMode = 'later' } = req.body
@@ -229,6 +200,7 @@ const bookAppointment = async (req, res) => {
 
         await Doctor.update({ slots_booked }, { where: { id: docId }, transaction })
         await transaction.commit()
+        committed = true
 
         const user = await User.findByPk(userId)
         notifyAppointmentBooked(appointment, user?.email).catch(console.error)
@@ -242,10 +214,16 @@ const bookAppointment = async (req, res) => {
 
         if (payMode === 'now') {
             try {
-                const session = await createStripeCheckoutSession(appointment, userId)
-                await Appointment.update({ paymentStatus: 'pending' }, { where: { id: appointment.id } })
-                response.sessionUrl = session.url
-                response.sessionId = session.id
+                const result = await createAppointmentPayment({ appointmentId: appointment.id, userId })
+                if (result.ok) {
+                    await appointment.reload()
+                    response.appointment = syncPaymentFields(appointment)
+                    response.sessionUrl = result.sessionUrl
+                    response.sessionId = result.sessionId
+                    response.existingPayment = result.existingPayment
+                } else {
+                    response.paymentWarning = result.message
+                }
             } catch (err) {
                 response.paymentWarning = err.message
             }
@@ -254,7 +232,9 @@ const bookAppointment = async (req, res) => {
         res.json(response)
 
     } catch (error) {
-        await transaction.rollback()
+        if (!committed) {
+            await transaction.rollback()
+        }
         console.log(error)
         res.status(500).json({ success: false, message: error.message })
     }
@@ -314,29 +294,34 @@ const listAppointment = async (req, res) => {
     }
 }
 
+const PAYMENT_ERROR_STATUS = {
+    appointment_not_found: 404,
+    unauthorized: 403,
+    already_paid: 400,
+}
+
 const paymentStripe = async (req, res) => {
     try {
         const userId = req.userId
         const { appointmentId } = req.body
-        const appointmentData = await Appointment.findByPk(appointmentId)
 
-        if (!appointmentData || appointmentData.cancelled) {
-            return res.status(404).json({ success: false, message: 'Appointment Cancelled or not found' })
+        if (!appointmentId) {
+            return res.status(400).json({ success: false, message: 'Missing appointmentId' })
         }
 
-        if (appointmentData.userId !== userId) {
-            return res.status(403).json({ success: false, message: 'Unauthorized action' })
+        const result = await createAppointmentPayment({ appointmentId, userId })
+
+        if (!result.ok) {
+            const statusCode = PAYMENT_ERROR_STATUS[result.code] || 400
+            return res.status(statusCode).json({ success: false, message: result.message })
         }
 
-        const status = appointmentData.paymentStatus || (appointmentData.payment ? 'paid' : 'unpaid')
-        if (status === 'paid' || appointmentData.payment) {
-            return res.status(400).json({ success: false, message: 'Appointment already paid' })
-        }
-
-        const session = await createStripeCheckoutSession(appointmentData, userId)
-        await Appointment.update({ paymentStatus: 'pending' }, { where: { id: appointmentId } })
-
-        res.json({ success: true, sessionUrl: session.url, sessionId: session.id })
+        res.json({
+            success: true,
+            sessionUrl: result.sessionUrl,
+            sessionId: result.sessionId,
+            existingPayment: result.existingPayment,
+        })
 
     } catch (error) {
         console.log(error)
@@ -344,6 +329,37 @@ const paymentStripe = async (req, res) => {
     }
 }
 
+const paymentStatus = async (req, res) => {
+    try {
+        const userId = req.userId
+        const { appointmentId } = req.params
+
+        const result = await getAppointmentPaymentStatus({ appointmentId, userId })
+
+        if (!result.ok) {
+            const statusCode = PAYMENT_ERROR_STATUS[result.code] || 400
+            return res.status(statusCode).json({ success: false, message: result.message })
+        }
+
+        res.json({
+            success: true,
+            appointmentId: result.appointmentId,
+            paymentStatus: result.paymentStatus,
+            checkoutUrl: result.checkoutUrl,
+            sessionId: result.sessionId,
+        })
+
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
+/**
+ * Browser-return UX helper only.
+ * Webhooks are the authoritative payment writer; this endpoint uses the same
+ * reconciliation service so a late webhook and an early redirect stay consistent.
+ */
 const verifyStripe = async (req, res) => {
     try {
         const userId = req.userId
@@ -353,37 +369,43 @@ const verifyStripe = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Missing Stripe session id' })
         }
 
-        const stripe = getStripe()
-        const session = await stripe.checkout.sessions.retrieve(sessionId)
+        const result = await reconcileCheckoutSession(sessionId, { expectedUserId: userId })
 
-        if (session.payment_status !== 'paid') {
+        if (result.status === 'paid' || result.status === 'already_paid') {
+            return res.json({
+                success: true,
+                message: result.message || 'Payment Successful',
+                paymentStatus: 'paid',
+                status: result.status,
+            })
+        }
+
+        if (result.status === 'cancelled_paid') {
+            return res.status(409).json({
+                success: false,
+                message: 'Payment received but appointment is cancelled. Contact support for a refund.',
+                status: result.status,
+            })
+        }
+
+        if (result.code === 'auth_user_mismatch' || result.code === 'auth_appointment_mismatch') {
+            return res.status(403).json({ success: false, message: 'Unauthorized action' })
+        }
+
+        if (result.code === 'appointment_not_found') {
+            return res.status(404).json({ success: false, message: 'Appointment not found' })
+        }
+
+        if (result.code === 'not_paid') {
             return res.status(400).json({ success: false, message: 'Payment Failed' })
         }
 
-        const appointmentId = session.metadata?.appointmentId
-        if (!appointmentId) {
-            return res.status(400).json({ success: false, message: 'Invalid payment session' })
-        }
-
-        if (session.metadata?.userId && String(session.metadata.userId) !== String(userId)) {
-            return res.status(403).json({ success: false, message: 'Unauthorized action' })
-        }
-
-        const appointment = await Appointment.findByPk(appointmentId)
-
-        if (!appointment || appointment.cancelled) {
-            return res.status(404).json({ success: false, message: 'Appointment not found or cancelled' })
-        }
-
-        if (appointment.userId !== userId) {
-            return res.status(403).json({ success: false, message: 'Unauthorized action' })
-        }
-
-        await Appointment.update(
-            { payment: true, paymentStatus: 'paid' },
-            { where: { id: appointmentId } }
-        )
-        res.json({ success: true, message: 'Payment Successful' })
+        return res.status(400).json({
+            success: false,
+            message: result.message || 'Unable to confirm payment',
+            status: result.status,
+            code: result.code,
+        })
     } catch (error) {
         console.log(error)
         res.status(500).json({ success: false, message: error.message })
@@ -392,6 +414,7 @@ const verifyStripe = async (req, res) => {
 
 const rescheduleAppointment = async (req, res) => {
     const transaction = await sequelize.transaction()
+    let committed = false
     try {
         const userId = req.userId
         const { appointmentId, newSlotDate, newSlotTime } = req.body
@@ -451,9 +474,12 @@ const rescheduleAppointment = async (req, res) => {
         await Doctor.update({ slots_booked }, { where: { id: docId }, transaction })
 
         await transaction.commit()
+        committed = true
         res.json({ success: true, message: 'Appointment Rescheduled' })
     } catch (error) {
-        await transaction.rollback()
+        if (!committed) {
+            await transaction.rollback()
+        }
         console.log(error)
         res.status(500).json({ success: false, message: error.message })
     }
@@ -535,6 +561,6 @@ const contactUs = async (req, res) => {
 
 export {
     registerUser, loginUser, getProfile, updateProfile, bookAppointment,
-    listAppointment, cancelAppointment, paymentStripe, verifyStripe,
+    listAppointment, cancelAppointment, paymentStripe, paymentStatus, verifyStripe,
     rescheduleAppointment, forgotPassword, resetPassword, contactUs,
 }

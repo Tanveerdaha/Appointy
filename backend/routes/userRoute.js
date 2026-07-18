@@ -1,7 +1,7 @@
 import express from 'express';
 import {
     registerUser, loginUser, getProfile, updateProfile, bookAppointment,
-    listAppointment, cancelAppointment, paymentStripe, verifyStripe,
+    listAppointment, cancelAppointment, paymentStripe, paymentStatus, verifyStripe,
     rescheduleAppointment, forgotPassword, resetPassword, contactUs,
 } from '../controllers/userController.js';
 import authUser from '../middlewares/authUser.js';
@@ -20,6 +20,7 @@ userRouter.post("/book-appointment", authUser, bookAppointment)
 userRouter.get("/appointments", authUser, listAppointment)
 userRouter.post("/cancel-appointment", authUser, cancelAppointment)
 userRouter.post("/payment-stripe", authUser, paymentStripe)
+userRouter.get("/payment-status/:appointmentId", authUser, paymentStatus)
 userRouter.post("/verify-stripe", authUser, verifyStripe)
 userRouter.post("/reschedule-appointment", authUser, rescheduleAppointment)
 

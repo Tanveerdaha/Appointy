@@ -9,6 +9,7 @@ import './models/index.js'
 import adminRouter from './routes/adminRoute.js'
 import doctorRouter from './routes/doctorRoute.js'
 import userRouter from './routes/userRoute.js'
+import webhookRouter from './routes/webhookRoute.js'
 import { notFoundHandler, errorHandler } from './middlewares/errorHandler.js'
 import sequelize from './config/mysql.js'
 
@@ -20,6 +21,11 @@ export const createApp = () => {
         .map((o) => o.trim())
 
     app.use(helmet())
+
+    // Stripe webhooks require the raw body for signature verification.
+    // Mount before express.json() so the payload is not parsed early.
+    app.use('/api/webhooks', webhookRouter)
+
     app.use(express.json({ limit: '1mb' }))
     app.use(cors({
         origin: (origin, callback) => {
