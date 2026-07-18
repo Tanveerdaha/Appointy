@@ -1,5 +1,5 @@
-import sequelize from '../config/mysql.js'
 import Appointment from '../models/appointmentModel.js'
+import { withTransaction } from '../utils/databaseTransaction.js'
 import StripePayment, {
   PAYMENT_STATUS,
   APPOINTMENT_PAYMENT_STATUS,
@@ -369,7 +369,10 @@ export const refundAppointmentPayment = async ({
 
   if (outerTx) return run(outerTx)
 
-  return sequelize.transaction(async (transaction) => run(transaction))
+  // Join caller's transaction when provided; otherwise own a managed transaction.
+  return withTransaction(async (transaction) => run(transaction), {
+    operation: 'refund_appointment_payment',
+  })
 }
 
 /**
@@ -385,7 +388,8 @@ export const updateRefundStatus = async ({
   stripeEventId = null,
   eventType = null,
 }) => {
-  return sequelize.transaction(async (transaction) => {
+  // DB-only webhook reconciliation; returning status objects commits the claim.
+  return withTransaction(async (transaction) => {
     const claim = await claimWebhookEvent(stripeEventId, eventType, transaction)
     if (claim.duplicate) {
       return { status: 'duplicate', message: 'Event already processed' }
@@ -579,5 +583,5 @@ export const updateRefundStatus = async ({
       appointmentStatus: appointment?.status,
       paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUND_PENDING,
     }
-  })
+  }, { operation: 'update_refund_status' })
 }

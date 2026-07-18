@@ -1,5 +1,5 @@
-import sequelize from '../config/mysql.js'
 import Appointment from '../models/appointmentModel.js'
+import { withTransaction } from '../utils/databaseTransaction.js'
 import StripePayment, {
   PAYMENT_STATUS,
   ACTIVE_PAYMENT_STATUSES,
@@ -248,7 +248,9 @@ export const requestCancellation = async ({
   }
 
   // ── Phase 1: validate + unpaid cancel OR initiate refund ─────────────────
-  const phase1 = await sequelize.transaction(async (transaction) => {
+  // Managed transaction: commits on resolve (including intentional REFUND_FAILED),
+  // rolls back only if the callback throws.
+  const phase1 = await withTransaction(async (transaction) => {
     const appointment = await Appointment.findByPk(appointmentId, {
       transaction,
       lock: transaction.LOCK.UPDATE,
@@ -485,7 +487,7 @@ export const requestCancellation = async ({
           ? APPOINTMENT_PAYMENT_STATUS.REFUNDED
           : APPOINTMENT_PAYMENT_STATUS.REFUND_PENDING,
     }
-  })
+  }, { operation: 'cancellation_phase1' })
 
   if (phase1.failed) {
     throw phase1.error
@@ -510,8 +512,9 @@ export const requestCancellation = async ({
 
   // ── Phase 2: cancel appointment after refund is safely committed ─────────
   // Separated so a lifecycle failure cannot roll back a successful Stripe refund.
+  // Transaction boundary: phase 1 (refund) already committed; this only cancels.
   try {
-    const cancelled = await sequelize.transaction(async (transaction) => {
+    const cancelled = await withTransaction(async (transaction) => {
       return cancelWithPaymentMirror(phase1.appointmentId, {
         actorType,
         actorId,
@@ -527,7 +530,7 @@ export const requestCancellation = async ({
         },
         transaction,
       })
-    })
+    }, { operation: 'cancellation_phase2' })
 
     logCancellation('info', 'Paid appointment cancelled with refund', {
       appointmentId: cancelled.id,
@@ -553,6 +556,7 @@ export const requestCancellation = async ({
       refundPending: phase1.paymentMirrorStatus === APPOINTMENT_PAYMENT_STATUS.REFUND_PENDING,
     }
   } catch (error) {
+    // Post-commit catch: phase 1 refund is already durable; do not attempt rollback.
     logCancellation('error', 'Refund created but appointment cancel failed', {
       appointmentId: phase1.appointmentId,
       paymentStatus: phase1.paymentMirrorStatus,

@@ -1,7 +1,7 @@
 import Stripe from 'stripe'
 import { Op } from 'sequelize'
-import sequelize from '../config/mysql.js'
 import Appointment from '../models/appointmentModel.js'
+import { withTransaction } from '../utils/databaseTransaction.js'
 import StripeWebhookEvent from '../models/stripeWebhookEventModel.js'
 import StripePayment, {
     PAYMENT_STATUS,
@@ -338,7 +338,8 @@ export const markAppointmentPaidFromCheckoutSession = async ({
     eventType = null,
     expectedUserId = null,
 }) => {
-    return sequelize.transaction(async (transaction) => {
+    // DB-only reconciliation; Stripe network I/O happens before this call.
+    return withTransaction(async (transaction) => {
         const claim = await claimWebhookEvent(stripeEventId, eventType, transaction)
         if (claim.duplicate) {
             logStripe('info', 'duplicate webhook event — no-op', {
@@ -489,7 +490,7 @@ export const markAppointmentPaidFromCheckoutSession = async ({
             paymentStatus: 'paid',
             payment: true,
         }
-    })
+    }, { operation: 'mark_appointment_paid' })
 }
 
 /**
@@ -527,7 +528,8 @@ export const handleCheckoutSessionExpired = async ({
     stripeEventId = null,
     eventType = 'checkout.session.expired',
 }) => {
-    return sequelize.transaction(async (transaction) => {
+    // DB-only; duplicate/ignored returns must commit (webhook claim).
+    return withTransaction(async (transaction) => {
         const claim = await claimWebhookEvent(stripeEventId, eventType, transaction)
         if (claim.duplicate) {
             return { status: 'duplicate', message: 'Event already processed' }
@@ -605,7 +607,7 @@ export const handleCheckoutSessionExpired = async ({
         }
 
         return { status: 'ignored', message: 'No pending payment to expire' }
-    })
+    }, { operation: 'checkout_session_expired' })
 }
 
 export const handleAsyncPaymentFailed = async ({
@@ -613,7 +615,8 @@ export const handleAsyncPaymentFailed = async ({
     stripeEventId = null,
     eventType = 'checkout.session.async_payment_failed',
 }) => {
-    return sequelize.transaction(async (transaction) => {
+    // DB-only; duplicate/ignored returns must commit (webhook claim).
+    return withTransaction(async (transaction) => {
         const claim = await claimWebhookEvent(stripeEventId, eventType, transaction)
         if (claim.duplicate) {
             return { status: 'duplicate', message: 'Event already processed' }
@@ -681,7 +684,7 @@ export const handleAsyncPaymentFailed = async ({
         }
 
         return { status: 'ignored', message: 'No pending payment to fail' }
-    })
+    }, { operation: 'async_payment_failed' })
 }
 
 /**

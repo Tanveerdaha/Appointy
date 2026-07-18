@@ -36,21 +36,32 @@ export async function withTransaction(callback, { operation = 'unnamed' } = {}) 
   logTransaction('info', 'Transaction started', { transactionId, operation })
 
   try {
+    // Sole application entry for sequelize.transaction — commits on resolve, rolls back on throw.
     const result = await sequelize.transaction(async (transaction) => {
       return callback(transaction)
     })
 
-    logTransaction('info', 'Transaction committed', { transactionId, operation })
+    // Logging must never turn a successful commit into a thrown failure for callers.
+    try {
+      logTransaction('info', 'Transaction committed', { transactionId, operation })
+    } catch {
+      // swallow — database commit already succeeded
+    }
+
     return result
   } catch (error) {
     const isBusinessError =
       typeof error?.statusCode === 'number' && error.statusCode >= 400 && error.statusCode < 500
-    logTransaction(isBusinessError ? 'info' : 'error', 'Transaction rolled back', {
-      transactionId,
-      operation,
-      reason: error?.message || 'unknown',
-      code: error?.code || null,
-    })
+    try {
+      logTransaction(isBusinessError ? 'info' : 'error', 'Transaction rolled back', {
+        transactionId,
+        operation,
+        reason: error?.message || 'unknown',
+        code: error?.code || null,
+      })
+    } catch {
+      // swallow — preserve the original operational error for the caller
+    }
     throw error
   }
 }
@@ -58,6 +69,7 @@ export async function withTransaction(callback, { operation = 'unnamed' } = {}) 
 /**
  * Safe manual rollback for legacy call sites that still own a transaction.
  * No-ops if the transaction is missing or already finished (committed/rolled back).
+ * Prefer withTransaction() for all new code — this exists only as a guardrail.
  */
 export async function safeRollback(transaction, { reason = null } = {}) {
   if (!transaction || transaction.finished) return false

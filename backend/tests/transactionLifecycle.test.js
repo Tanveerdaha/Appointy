@@ -303,4 +303,80 @@ describe('Transaction lifecycle', () => {
     const rolled = await safeRollback(tx, { reason: 'should_noop' })
     expect(rolled).toBe(false)
   })
+
+  test('withTransaction preserves callback return value after commit', async () => {
+    const payload = { ok: true, id: 'tx-result-1' }
+    const result = await withTransaction(async () => payload, {
+      operation: 'test_return_value',
+    })
+    expect(result).toBe(payload)
+    expect(result).toEqual({ ok: true, id: 'tx-result-1' })
+  })
+
+  test('withTransaction preserves thrown error statusCode and code', async () => {
+    const original = Object.assign(new Error('business_reject'), {
+      statusCode: 409,
+      code: 'conflict',
+    })
+
+    let caught = null
+    try {
+      await withTransaction(async () => {
+        throw original
+      }, { operation: 'test_error_preserve' })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBe(original)
+    expect(caught.statusCode).toBe(409)
+    expect(caught.code).toBe('conflict')
+  })
+
+  test('safeRollback rolls back an unfinished transaction and no-ops when missing', async () => {
+    expect(await safeRollback(null, { reason: 'missing' })).toBe(false)
+    expect(await safeRollback(undefined, { reason: 'missing' })).toBe(false)
+
+    const tx = await sequelize.transaction()
+    expect(tx.finished).toBeFalsy()
+    const rolled = await safeRollback(tx, { reason: 'test_unfinished' })
+    expect(rolled).toBe(true)
+    expect(tx.finished).toBe('rollback')
+    // Already finished — must no-op (eliminates post-commit rollback risk).
+    expect(await safeRollback(tx, { reason: 'already_finished' })).toBe(false)
+  })
+
+  test('returning a failure object from withTransaction commits (does not roll back)', async () => {
+    const user = await seedUser()
+    const doctor = await seedDoctor()
+
+    const result = await withTransaction(async (transaction) => {
+      const appointment = await Appointment.create(
+        {
+          userId: user.id,
+          docId: doctor.id,
+          userData: { id: user.id },
+          docData: { id: doctor.id },
+          amount: 100,
+          currency: 'PKR',
+          startTime: FUTURE_START,
+          heldStartTime: FUTURE_START,
+          slotDate: '22_7_2030',
+          slotTime: '10:00 AM',
+          date: Date.now(),
+          payment: false,
+          paymentStatus: 'refund_failed',
+          status: 'CONFIRMED',
+        },
+        { transaction }
+      )
+      // Intentional non-throw failure shape (mirrors cancellation REFUND_FAILED path).
+      return { done: true, failed: true, appointmentId: appointment.id }
+    }, { operation: 'test_commit_on_return' })
+
+    expect(result.failed).toBe(true)
+    const found = await Appointment.findByPk(result.appointmentId)
+    expect(found).not.toBeNull()
+    expect(found.paymentStatus).toBe('refund_failed')
+  })
 })
