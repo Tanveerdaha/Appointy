@@ -72,10 +72,29 @@ const AdminContextProvider = (props) => {
         }
     }, [getAllDoctors])
 
-    const cancelAppointment = useCallback(async (appointmentId) => {
-        if (!window.confirm('Cancel this appointment?')) return
+    const cancelAppointment = useCallback(async (appointmentId, { paymentStatus } = {}) => {
+        const isPaid = paymentStatus === 'paid' || paymentStatus === 'refund_failed'
+        let reason = 'Cancelled by admin'
+        if (isPaid) {
+            reason = window.prompt(
+                'Paid appointment — enter refund reason (required):',
+                'Admin cancellation'
+            )
+            if (reason == null) return
+            reason = reason.trim()
+            if (!reason) {
+                toast.error('Refund reason is required for paid appointments')
+                return
+            }
+        } else if (!window.confirm('Cancel this appointment?')) {
+            return
+        }
+
         try {
-            const { data } = await api.post('/api/admin/cancel-appointment', { appointmentId })
+            const { data } = await api.post('/api/admin/cancel-appointment', {
+                appointmentId,
+                reason,
+            })
             if (data.success) {
                 toast.success(data.message)
                 getAllAppointments()

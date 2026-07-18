@@ -4,6 +4,7 @@ import Appointment from './appointmentModel.js'
 import AppointmentHistory from './appointmentHistoryModel.js'
 import StripeWebhookEvent from './stripeWebhookEventModel.js'
 import StripePayment from './stripePaymentModel.js'
+import RefundAudit from './refundAuditModel.js'
 
 User.hasMany(Appointment, { foreignKey: 'userId', onDelete: 'RESTRICT' })
 Doctor.hasMany(Appointment, { foreignKey: 'docId', onDelete: 'RESTRICT' })
@@ -18,6 +19,11 @@ StripePayment.belongsTo(User, { foreignKey: 'userId' })
 Appointment.hasMany(AppointmentHistory, { foreignKey: 'appointmentId', onDelete: 'RESTRICT' })
 AppointmentHistory.belongsTo(Appointment, { foreignKey: 'appointmentId' })
 
+Appointment.hasMany(RefundAudit, { foreignKey: 'appointmentId', constraints: false })
+RefundAudit.belongsTo(Appointment, { foreignKey: 'appointmentId', constraints: false })
+StripePayment.hasMany(RefundAudit, { foreignKey: 'paymentTransactionId', constraints: false })
+RefundAudit.belongsTo(StripePayment, { foreignKey: 'paymentTransactionId', constraints: false })
+
 export {
   User,
   Doctor,
@@ -25,4 +31,5 @@ export {
   AppointmentHistory,
   StripeWebhookEvent,
   StripePayment,
+  RefundAudit,
 }

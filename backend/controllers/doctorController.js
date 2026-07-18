@@ -4,12 +4,16 @@ import { Op, fn, col } from "sequelize";
 import Doctor from "../models/doctorModel.js";
 import Appointment from "../models/appointmentModel.js";
 import {
-  cancelAppointment as cancelAppointmentLifecycle,
   completeAppointment as completeAppointmentLifecycle,
   LifecycleError,
   ACTOR_TYPE,
   APPOINTMENT_STATUS,
 } from "../services/appointmentStateService.js";
+import {
+  requestCancellation,
+  CancellationError,
+  RefundError,
+} from "../services/cancellationService.js";
 
 // Doctor login
 const loginDoctor = async (req, res) => {
@@ -46,30 +50,33 @@ const appointmentsDoctor = async (req, res) => {
   }
 };
 
-// Cancel appointment
+// Cancel appointment (paid bookings trigger full refund — doctor unavailable)
 const appointmentCancel = async (req, res) => {
   try {
     const docId = req.user.id;
-    const { appointmentId } = req.body;
+    const { appointmentId, reason } = req.body;
 
-    const appointment = await Appointment.findByPk(appointmentId);
-    if (!appointment || appointment.docId !== docId) {
-      return res.status(403).json({ success: false, message: "Invalid doctor or appointment" });
-    }
-
-    if (appointment.status === APPOINTMENT_STATUS.CANCELLED) {
-      return res.status(400).json({ success: false, message: "Appointment already cancelled" });
-    }
-
-    await cancelAppointmentLifecycle(appointment.id, {
+    const result = await requestCancellation({
+      appointmentId,
       actorType: ACTOR_TYPE.DOCTOR,
       actorId: docId,
-      reason: 'Cancelled by doctor',
+      reason: reason || 'DOCTOR_UNAVAILABLE',
     });
 
-    res.json({ success: true, message: "Appointment Cancelled" });
+    res.json({
+      success: true,
+      message: result.message,
+      refundRequired: result.refundRequired || false,
+      refundPending: result.refundPending || false,
+      paymentStatus: result.appointment?.paymentStatus,
+      appointmentStatus: result.appointment?.status,
+    });
   } catch (error) {
-    if (error instanceof LifecycleError) {
+    if (
+      error instanceof CancellationError ||
+      error instanceof RefundError ||
+      error instanceof LifecycleError
+    ) {
       return res.status(error.statusCode).json({
         success: false,
         message: error.message,

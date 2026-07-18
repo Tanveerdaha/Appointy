@@ -180,7 +180,7 @@ export const validateStripePayment = (session, appointment, { expectedUserId = n
     return { ok: true, appointmentId, metadataUserId }
 }
 
-const claimWebhookEvent = async (stripeEventId, eventType, transaction) => {
+export const claimWebhookEvent = async (stripeEventId, eventType, transaction) => {
     if (!stripeEventId) return { claimed: true, duplicate: false }
 
     const existing = await StripeWebhookEvent.findOne({
@@ -680,8 +680,9 @@ export const handleAsyncPaymentFailed = async ({
 }
 
 /**
- * Payment-only refund. Appointment lifecycle stays COMPLETED/CANCELLED; only
- * StripePayment (+ appointment.paymentStatus mirror) moves to refunded.
+ * Payment-only refund reconciliation (webhook-driven).
+ * Appointment lifecycle stays COMPLETED/CANCELLED; only payment status moves.
+ * Delegates to refundService.updateRefundStatus.
  */
 export const markPaymentRefunded = async ({
     appointmentId,
@@ -690,97 +691,32 @@ export const markPaymentRefunded = async ({
     stripeEventId = null,
     eventType = null,
     amountRefunded = null,
+    refundId = null,
+    refundStatus = null,
+    chargeId = null,
 }) => {
-    return sequelize.transaction(async (transaction) => {
-        const claim = await claimWebhookEvent(stripeEventId, eventType, transaction)
-        if (claim.duplicate) {
-            return { status: 'duplicate', message: 'Event already processed' }
-        }
+    // Dynamic import avoids circular dependency with refundService.
+    const { updateRefundStatus } = await import('./refundService.js')
 
-        if (!appointmentId && !paymentIntentId && !checkoutSessionId) {
-            return { status: 'ignored', message: 'Missing refund identifiers' }
-        }
-
-        const appointment = appointmentId
-            ? await Appointment.findByPk(appointmentId, {
-                transaction,
-                lock: transaction.LOCK.UPDATE,
-            })
-            : null
-
-        const paymentWhere = paymentIntentId
-            ? { stripePaymentIntentId: paymentIntentId }
-            : checkoutSessionId
-                ? { stripeCheckoutSessionId: checkoutSessionId }
-                : { appointmentId }
-
+    let resolvedPaymentIntentId = paymentIntentId
+    if (!resolvedPaymentIntentId && checkoutSessionId) {
         const payment = await StripePayment.findOne({
-            where: paymentWhere,
-            transaction,
-            lock: transaction.LOCK.UPDATE,
+            where: { stripeCheckoutSessionId: checkoutSessionId },
             order: [['createdAt', 'DESC']],
         })
-
-        if (!payment) {
-            logStripe('warn', 'refund event with no matching payment record', {
-                appointmentId,
-                paymentIntentId,
-                checkoutSessionId,
-                stripeEventId,
-            })
-            return { status: 'ignored', message: 'Payment record not found' }
+        resolvedPaymentIntentId = payment?.stripePaymentIntentId || null
+        if (!appointmentId) {
+            appointmentId = payment?.appointmentId || null
         }
+    }
 
-        if (payment.status === PAYMENT_STATUS.REFUNDED) {
-            return {
-                status: 'already_refunded',
-                message: 'Payment already refunded',
-                appointmentId: payment.appointmentId,
-                paymentStatus: 'refunded',
-            }
-        }
-
-        await payment.update(
-            {
-                status: PAYMENT_STATUS.REFUNDED,
-                activeAppointmentId: null,
-            },
-            { transaction }
-        )
-
-        const lockedAppointment =
-            appointment ||
-            (await Appointment.findByPk(payment.appointmentId, {
-                transaction,
-                lock: transaction.LOCK.UPDATE,
-            }))
-
-        if (lockedAppointment) {
-            // Payment-only: do not change appointment.status.
-            await lockedAppointment.update(
-                {
-                    paymentStatus: 'refunded',
-                    payment: false,
-                },
-                { transaction }
-            )
-        }
-
-        logStripe('info', 'payment marked refunded', {
-            appointmentId: payment.appointmentId,
-            paymentId: payment.id,
-            stripeEventId,
-            eventType,
-            amountRefunded,
-            appointmentStatus: lockedAppointment?.status,
-        })
-
-        return {
-            status: 'refunded',
-            message: 'Payment refunded',
-            appointmentId: payment.appointmentId,
-            appointmentStatus: lockedAppointment?.status,
-            paymentStatus: 'refunded',
-        }
+    return updateRefundStatus({
+        paymentIntentId: resolvedPaymentIntentId,
+        chargeId,
+        refundId,
+        refundStatus: refundStatus || (eventType === 'charge.refunded' ? 'succeeded' : null),
+        amountRefunded,
+        stripeEventId,
+        eventType,
     })
 }

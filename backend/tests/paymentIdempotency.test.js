@@ -46,6 +46,8 @@ beforeAll(async () => {
 })
 
 beforeEach(async () => {
+    const RefundAudit = (await import('../models/refundAuditModel.js')).default
+    await RefundAudit.destroy({ where: {}, truncate: true })
     await StripePayment.destroy({ where: {}, truncate: true })
     await StripeWebhookEvent.destroy({ where: {}, truncate: true })
     await AppointmentHistory.destroy({ where: {}, truncate: true })

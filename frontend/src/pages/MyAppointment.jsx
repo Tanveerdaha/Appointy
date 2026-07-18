@@ -40,8 +40,19 @@ const MyAppointments = () => {
     }
   }, [])
 
-  const cancelAppointment = async (appointmentId) => {
+  const [cancellingId, setCancellingId] = useState('')
+
+  const cancelAppointment = async (appointmentId, paymentStatus) => {
+    const isPaid = paymentStatus === 'paid' || paymentStatus === 'refund_failed'
+    const confirmed = window.confirm(
+      isPaid
+        ? 'Request cancellation and refund for this paid appointment?'
+        : 'Cancel this appointment?'
+    )
+    if (!confirmed) return
+
     try {
+      setCancellingId(appointmentId)
       const { data } = await api.post('/api/user/cancel-appointment', { appointmentId })
       if (data.success) {
         toast.success(data.message)
@@ -52,6 +63,8 @@ const MyAppointments = () => {
       }
     } catch (error) {
       toast.error(error.response?.data?.message || error.message)
+    } finally {
+      setCancellingId('')
     }
   }
 
@@ -169,7 +182,7 @@ const MyAppointments = () => {
                     {slotDateFormat(item.slotDate)} | {item.slotTime}
                   </p>
                   <p className='text-xs mt-1 text-gray-500'>
-                    Payment: {paymentStatus === 'paid' ? 'Paid' : paymentStatus === 'pending' ? 'Pending' : paymentStatus === 'refunded' ? 'Refunded' : 'Unpaid'}
+                    Payment: {actions.paymentLabel}
                   </p>
                 </div>
                 <div />
@@ -195,11 +208,21 @@ const MyAppointments = () => {
                     </button>
                   )}
                   {actions.showCancel && (
-                    <button onClick={() => cancelAppointment(apptId)} className='text-[#696969] sm:min-w-48 py-2 border rounded hover:bg-red-600 hover:text-white transition-all duration-300'>
-                      Cancel appointment
+                    <button
+                      onClick={() => cancelAppointment(apptId, paymentStatus)}
+                      disabled={cancellingId === apptId}
+                      className='text-[#696969] sm:min-w-48 py-2 border rounded hover:bg-red-600 hover:text-white transition-all duration-300 disabled:opacity-60'
+                    >
+                      {cancellingId === apptId ? 'Processing...' : actions.cancelLabel}
                     </button>
                   )}
-                  {actions.showCancelled && (
+                  {actions.showRefundProcessing && (
+                    <button className='sm:min-w-48 py-2 border border-amber-500 rounded text-amber-600'>Refund processing...</button>
+                  )}
+                  {actions.showRefunded && actions.showCancelled && (
+                    <button className='sm:min-w-48 py-2 border border-red-500 rounded text-red-500'>Cancelled · Refunded</button>
+                  )}
+                  {actions.showCancelled && !actions.showRefunded && (
                     <button className='sm:min-w-48 py-2 border border-red-500 rounded text-red-500'>Appointment cancelled</button>
                   )}
                 </div>

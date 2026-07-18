@@ -1,6 +1,10 @@
 import { DataTypes } from 'sequelize'
 import sequelize from '../config/mysql.js'
 
+/**
+ * Payment transaction ledger (StripePayment).
+ * Appointment lifecycle stays separate from payment lifecycle.
+ */
 export const PAYMENT_STATUS = {
   CREATED: 'CREATED',
   CHECKOUT_CREATED: 'CHECKOUT_CREATED',
@@ -8,7 +12,19 @@ export const PAYMENT_STATUS = {
   PAID: 'PAID',
   FAILED: 'FAILED',
   EXPIRED: 'EXPIRED',
+  REFUND_PENDING: 'REFUND_PENDING',
   REFUNDED: 'REFUNDED',
+  REFUND_FAILED: 'REFUND_FAILED',
+}
+
+/** Appointment-level paymentStatus mirror (lowercase). */
+export const APPOINTMENT_PAYMENT_STATUS = {
+  UNPAID: 'unpaid',
+  PENDING: 'pending',
+  PAID: 'paid',
+  REFUND_PENDING: 'refund_pending',
+  REFUNDED: 'refunded',
+  REFUND_FAILED: 'refund_failed',
 }
 
 // Statuses that represent an in-flight, unpaid attempt. At most one of these may
@@ -17,6 +33,12 @@ export const ACTIVE_PAYMENT_STATUSES = [
   PAYMENT_STATUS.CREATED,
   PAYMENT_STATUS.CHECKOUT_CREATED,
   PAYMENT_STATUS.PENDING,
+]
+
+export const PAID_LIKE_STATUSES = [
+  PAYMENT_STATUS.PAID,
+  PAYMENT_STATUS.REFUND_PENDING,
+  PAYMENT_STATUS.REFUND_FAILED,
 ]
 
 const StripePayment = sequelize.define('StripePayment', {
@@ -39,6 +61,11 @@ const StripePayment = sequelize.define('StripePayment', {
     unique: true,
   },
   stripePaymentIntentId: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    unique: true,
+  },
+  stripeChargeId: {
     type: DataTypes.STRING,
     allowNull: true,
     unique: true,
@@ -78,6 +105,27 @@ const StripePayment = sequelize.define('StripePayment', {
     type: DataTypes.DATE,
     allowNull: true,
   },
+  stripeRefundId: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    unique: true,
+  },
+  refundAmount: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
+  refundStatus: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+  refundReason: {
+    type: DataTypes.STRING(512),
+    allowNull: true,
+  },
+  refundedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
 }, {
   tableName: 'stripe_payments',
   timestamps: true,
@@ -87,6 +135,8 @@ const StripePayment = sequelize.define('StripePayment', {
     { fields: ['status'] },
     { unique: true, fields: ['stripeCheckoutSessionId'] },
     { unique: true, fields: ['stripePaymentIntentId'] },
+    { unique: true, fields: ['stripeChargeId'] },
+    { unique: true, fields: ['stripeRefundId'] },
     { unique: true, fields: ['activeAppointmentId'] },
   ],
   hooks: {

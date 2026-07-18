@@ -80,8 +80,12 @@ const DoctorContextProvider = (props) => {
   }, [getAppointments, getDashData])
 
   const cancelAppointment = useCallback(async (appointmentId) => {
+    if (!window.confirm('Cancel this appointment? Paid bookings will receive a full refund.')) return
     try {
-      const { data } = await api.post('/api/doctor/cancel-appointment', { appointmentId })
+      const { data } = await api.post('/api/doctor/cancel-appointment', {
+        appointmentId,
+        reason: 'DOCTOR_UNAVAILABLE',
+      })
 
       if (data.success) {
         toast.success(data.message)

@@ -5,7 +5,7 @@ import { AdminContext } from '../../context/adminContext'
 import { AppContext } from '../../context/appContext'
 import LoadingSpinner from '../../components/LoadingSpinner'
 import EmptyState from '../../components/EmptyState'
-import { getPaymentLabel } from '../../utils/payment'
+import { getPaymentLabel, isAppointmentCancelled, isAppointmentCompleted } from '../../utils/payment'
 
 const AllAppointments = () => {
   const { aToken, appointments, cancelAppointment, completeAppointment, getAllAppointments } = useContext(AdminContext)
@@ -50,14 +50,14 @@ const AllAppointments = () => {
                 <p>{item.docData.name}</p>
               </div>
               <p><span className='sm:hidden text-xs font-medium'>Fees: </span>{currency}{item.amount}</p>
-              <p className={`text-xs font-medium ${getPaymentLabel(item) === 'Paid' ? 'text-green-600' : 'text-gray-500'}`}>
+              <p className={`text-xs font-medium ${getPaymentLabel(item) === 'Paid' ? 'text-green-600' : getPaymentLabel(item).includes('Refund') ? 'text-amber-600' : 'text-gray-500'}`}>
                 <span className='sm:hidden'>Payment: </span>{getPaymentLabel(item)}
               </p>
-              {item.cancelled ? <p className='text-red-400 text-xs font-medium'>Cancelled</p>
-                : item.isCompleted ? <p className='text-green-500 text-xs font-medium'>Completed</p> :
+              {isAppointmentCancelled(item) ? <p className='text-red-400 text-xs font-medium'>Cancelled</p>
+                : isAppointmentCompleted(item) ? <p className='text-green-500 text-xs font-medium'>Completed</p> :
                   <div className='flex'>
                     <img onClick={() => completeAppointment(getId(item))} className='w-10 cursor-pointer' src={assets.tick_icon} alt="Complete" />
-                    <img onClick={() => cancelAppointment(getId(item))} className='w-10 cursor-pointer' src={assets.cancel_icon} alt="Cancel" />
+                    <img onClick={() => cancelAppointment(getId(item), { paymentStatus: item.paymentStatus || (item.payment ? 'paid' : 'unpaid') })} className='w-10 cursor-pointer' src={assets.cancel_icon} alt="Cancel" />
                   </div>}
             </div>
           ))}

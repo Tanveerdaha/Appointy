@@ -69,7 +69,7 @@ const Dashboard = () => {
                 {item.cancelled ? <p className='text-red-400 text-xs font-medium'>Cancelled</p> : item.isCompleted ? <p className='text-green-500 text-xs font-medium'>Completed</p> : (
                   <div className='flex'>
                     <img onClick={() => completeAppointment(getId(item))} className='w-10 cursor-pointer' src={assets.tick_icon} alt="Complete" />
-                    <img onClick={() => cancelAppointment(getId(item))} className='w-10 cursor-pointer' src={assets.cancel_icon} alt="Cancel" />
+                    <img onClick={() => cancelAppointment(getId(item), { paymentStatus: item.paymentStatus || (item.payment ? 'paid' : 'unpaid') })} className='w-10 cursor-pointer' src={assets.cancel_icon} alt="Cancel" />
                   </div>
                 )}
               </div>

@@ -34,6 +34,8 @@ beforeAll(async () => {
 
 beforeEach(async () => {
     await AppointmentHistory.destroy({ where: {}, truncate: true })
+    const RefundAudit = (await import('../models/refundAuditModel.js')).default
+    await RefundAudit.destroy({ where: {}, truncate: true })
     await Appointment.destroy({ where: {}, truncate: true })
     await Doctor.destroy({ where: {}, truncate: true })
     await User.destroy({ where: {}, truncate: true })

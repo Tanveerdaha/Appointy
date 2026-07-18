@@ -3,7 +3,7 @@ import { useContext, useEffect } from 'react'
 import { DoctorContext } from '../../context/doctorContext'
 import { AppContext } from '../../context/appContext'
 import { assets } from '../../assets/assets'
-import { getPaymentLabel } from '../../utils/payment'
+import { getPaymentLabel, isAppointmentCancelled, isAppointmentCompleted } from '../../utils/payment'
 
 const DoctorAppointments = () => {
   const { dToken, appointments, getAppointments, cancelAppointment, completeAppointment } = useContext(DoctorContext)
@@ -47,9 +47,9 @@ const DoctorAppointments = () => {
             <p className='max-sm:hidden'>{calculateAge(item.userData.dob)}</p>
             <p>{slotDateFormat(item.slotDate)}, {item.slotTime}</p>
             <p>{currency}{item.amount}</p>
-            {item.cancelled
+            {isAppointmentCancelled(item)
               ? <p className='text-red-400 text-xs font-medium'>Cancelled</p>
-              : item.isCompleted
+              : isAppointmentCompleted(item)
                 ? <p className='text-green-500 text-xs font-medium'>Completed</p>
                 : <div className='flex'>
                   <img onClick={() => cancelAppointment(getId(item))} className='w-10 cursor-pointer' src={assets.cancel_icon} alt="" />

@@ -9,12 +9,16 @@ import User from "../models/userModel.js"
 import { verifyAdminPassword } from "../middlewares/authAdmin.js";
 import { notifyAppointmentCancelled } from "../services/notificationService.js";
 import {
-  cancelAppointment as cancelAppointmentLifecycle,
   completeAppointment as completeAppointmentLifecycle,
   LifecycleError,
   ACTOR_TYPE,
   APPOINTMENT_STATUS,
 } from "../services/appointmentStateService.js";
+import {
+  requestCancellation,
+  CancellationError,
+  RefundError,
+} from "../services/cancellationService.js";
 
 // API for admin login
 const loginAdmin = async (req, res) => {
@@ -92,31 +96,34 @@ const addDoctor = async (req, res) => {
   }
 };
 
-// API for appointment cancellation
+// API for appointment cancellation (always reconciles paid appointments via refund)
 const appointmentCancel = async (req, res) => {
     try {
-        const { appointmentId } = req.body
-        const appointmentData = await Appointment.findByPk(appointmentId)
+        const { appointmentId, reason } = req.body
 
-        if (!appointmentData) {
-            return res.status(404).json({ success: false, message: 'Appointment not found' })
-        }
-
-        if (appointmentData.status === APPOINTMENT_STATUS.CANCELLED) {
-            return res.status(400).json({ success: false, message: 'Appointment already cancelled' })
-        }
-
-        await cancelAppointmentLifecycle(appointmentData.id, {
+        const result = await requestCancellation({
+            appointmentId,
             actorType: ACTOR_TYPE.ADMIN,
-            reason: 'Cancelled by admin',
+            actorId: null,
+            reason,
         })
 
-        notifyAppointmentCancelled(appointmentData, appointmentData.userData?.email).catch(console.error)
+        notifyAppointmentCancelled(result.appointment, result.appointment.userData?.email).catch(console.error)
 
-        res.json({ success: true, message: 'Appointment Cancelled' })
-
+        res.json({
+            success: true,
+            message: result.message,
+            refundRequired: result.refundRequired || false,
+            refundPending: result.refundPending || false,
+            paymentStatus: result.appointment?.paymentStatus,
+            appointmentStatus: result.appointment?.status,
+        })
     } catch (error) {
-        if (error instanceof LifecycleError) {
+        if (
+            error instanceof CancellationError ||
+            error instanceof RefundError ||
+            error instanceof LifecycleError
+        ) {
             return res.status(error.statusCode).json({
                 success: false,
                 message: error.message,

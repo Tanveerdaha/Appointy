@@ -37,7 +37,23 @@ describe('appointmentLifecycle helpers', () => {
     expect(confirmed.showPay).toBe(true)
     expect(confirmed.showReschedule).toBe(true)
     expect(confirmed.showCancel).toBe(true)
+    expect(confirmed.cancelLabel).toBe('Cancel appointment')
     expect(confirmed.showCompleted).toBe(false)
+
+    const paid = getLifecycleActions(
+      { status: APPOINTMENT_STATUS.CONFIRMED },
+      'paid'
+    )
+    expect(paid.showCancel).toBe(true)
+    expect(paid.cancelLabel).toBe('Request cancellation/refund')
+    expect(paid.showPay).toBe(false)
+
+    const refundPending = getLifecycleActions(
+      { status: APPOINTMENT_STATUS.CANCELLED },
+      'refund_pending'
+    )
+    expect(refundPending.showRefundProcessing).toBe(true)
+    expect(refundPending.showCancel).toBe(false)
 
     const completed = getLifecycleActions(
       { status: APPOINTMENT_STATUS.COMPLETED },

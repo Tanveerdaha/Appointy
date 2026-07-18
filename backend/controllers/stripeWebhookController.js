@@ -5,6 +5,7 @@ import {
     handleAsyncPaymentFailed,
     markPaymentRefunded,
 } from '../services/stripePaymentService.js'
+import { updateRefundStatus } from '../services/refundService.js'
 
 const logWebhook = (level, message, meta = {}) => {
     const payload = { service: 'stripeWebhook', ...meta }
@@ -114,7 +115,6 @@ export const handleStripeWebhook = async (req, res) => {
                     eventId: event.id,
                     paymentIntentId: event.data.object?.id,
                 })
-                // Card Checkout is usually synchronous; acknowledge without mutating paid state.
                 break
             }
 
@@ -124,18 +124,53 @@ export const handleStripeWebhook = async (req, res) => {
                     typeof charge.payment_intent === 'string'
                         ? charge.payment_intent
                         : charge.payment_intent?.id || null
+                const chargeId = charge.id || null
                 const result = await markPaymentRefunded({
                     paymentIntentId,
+                    chargeId,
                     stripeEventId: event.id,
                     eventType: event.type,
                     amountRefunded: charge.amount_refunded,
+                    refundStatus: 'succeeded',
                 })
-                logWebhook('info', 'refund handled', {
+                logWebhook('info', 'charge.refunded handled', {
                     eventId: event.id,
                     paymentIntentId,
+                    chargeId,
                     result: result.status,
                     appointmentId: result.appointmentId,
                     appointmentStatus: result.appointmentStatus,
+                })
+                break
+            }
+
+            case 'refund.created':
+            case 'refund.updated': {
+                const refund = event.data.object
+                const paymentIntentId =
+                    typeof refund.payment_intent === 'string'
+                        ? refund.payment_intent
+                        : refund.payment_intent?.id || null
+                const chargeId =
+                    typeof refund.charge === 'string'
+                        ? refund.charge
+                        : refund.charge?.id || null
+                const result = await updateRefundStatus({
+                    paymentIntentId,
+                    chargeId,
+                    refundId: refund.id,
+                    refundStatus: refund.status,
+                    amountRefunded: refund.amount,
+                    stripeEventId: event.id,
+                    eventType: event.type,
+                })
+                logWebhook('info', 'refund lifecycle event handled', {
+                    eventId: event.id,
+                    eventType: event.type,
+                    refundId: refund.id,
+                    refundStatus: refund.status,
+                    result: result.status,
+                    appointmentId: result.appointmentId,
                 })
                 break
             }
@@ -154,7 +189,6 @@ export const handleStripeWebhook = async (req, res) => {
             eventType: event?.type,
             error: error.message,
         })
-        // Return 500 so Stripe retries transient failures.
         return res.status(500).json({ success: false, message: 'Webhook processing failed' })
     }
 }
