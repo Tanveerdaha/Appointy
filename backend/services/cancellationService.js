@@ -1,5 +1,5 @@
-import sequelize from '../config/mysql.js'
 import Appointment from '../models/appointmentModel.js'
+import { withTransaction } from '../utils/databaseTransaction.js'
 import StripePayment, {
   PAYMENT_STATUS,
   ACTIVE_PAYMENT_STATUSES,
@@ -17,7 +17,7 @@ import { calculateRefundEligibility } from './refundPolicyService.js'
 import {
   RefundError,
   findPaidPayment,
-  processStripeRefund,
+  verifyRefundEligibility,
   writeRefundAudit,
 } from './refundService.js'
 import { getStripe } from './stripePaymentService.js'
@@ -121,6 +121,40 @@ const expireCheckoutSessions = async (sessionIds, { appointmentId } = {}) => {
       })
     }
   }
+}
+
+const createStripeRefund = async ({
+  payment,
+  appointmentId,
+  amountCents,
+  actorType,
+  createRefundFn,
+}) => {
+  const params = {
+    amount: amountCents,
+    reason: 'requested_by_customer',
+    metadata: {
+      appointmentId: String(appointmentId),
+      paymentId: String(payment.id),
+      actorType: String(actorType || ''),
+    },
+  }
+  if (payment.stripePaymentIntentId) {
+    params.payment_intent = payment.stripePaymentIntentId
+  } else {
+    params.charge = payment.stripeChargeId
+  }
+
+  const createRefund =
+    createRefundFn ||
+    (async (refundParams, options) => {
+      const stripe = getStripe()
+      return stripe.refunds.create(refundParams, options)
+    })
+
+  return createRefund(params, {
+    idempotencyKey: `refund_${appointmentId}_${payment.id}_${amountCents}`,
+  })
 }
 
 /**
@@ -248,7 +282,9 @@ export const requestCancellation = async ({
   }
 
   // ── Phase 1: validate + unpaid cancel OR initiate refund ─────────────────
-  const phase1 = await sequelize.transaction(async (transaction) => {
+  // Managed transaction: commits on resolve (including intentional REFUND_FAILED),
+  // rolls back only if the callback throws.
+  const phase1 = await withTransaction(async (transaction) => {
     const appointment = await Appointment.findByPk(appointmentId, {
       transaction,
       lock: transaction.LOCK.UPDATE,
@@ -433,63 +469,64 @@ export const requestCancellation = async ({
       })
     }
 
-    // Create Stripe refund inside this transaction. On Stripe failure, payment
-    // becomes REFUND_FAILED and we return (commit) without cancelling.
-    let refundResult
-    try {
-      refundResult = await processStripeRefund({
-        payment,
-        appointment,
-        amountCents: eligibility.refundAmountCents,
-        reason: cancelReason,
-        actorType,
-        actorId,
-        auditAction: actorAuditAction(actorType),
-        createRefundFn,
-        transaction,
+    verifyRefundEligibility(payment)
+    const refundAmount = Math.round(eligibility.refundAmountCents)
+    if (!Number.isFinite(refundAmount) || refundAmount <= 0 || refundAmount > payment.amount) {
+      throw new RefundError('Invalid refund amount', {
+        statusCode: 400,
+        code: 'invalid_refund_amount',
       })
-    } catch (error) {
-      // Catch so Sequelize commits REFUND_FAILED instead of rolling it back.
-      if (error instanceof RefundError && error.code === 'stripe_refund_failed') {
-        logCancellation('error', 'Refund failed — appointment not cancelled', {
-          appointmentId: appointment.id,
-          paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUND_FAILED,
-          refundRequired: true,
-          refundResult: 'failed',
-          error: error.message,
-        })
-        return { done: true, failed: true, error }
-      }
-      throw error
     }
 
-    if (refundResult.payment.status === PAYMENT_STATUS.REFUND_FAILED) {
-      return {
-        done: true,
-        failed: true,
-        error: new CancellationError('Refund failed; appointment was not cancelled', {
-          statusCode: 502,
-          code: 'stripe_refund_failed',
-        }),
-      }
-    }
+    // DB-only refund claim. The appointment is cancelled durably before Stripe
+    // is called, so external latency/failure can never roll back cancellation.
+    await payment.update(
+      {
+        status: PAYMENT_STATUS.REFUND_PENDING,
+        refundAmount,
+        refundStatus: 'pending',
+        refundReason: cancelReason,
+        activeAppointmentId: null,
+      },
+      { transaction }
+    )
+
+    const cancelled = await cancelWithPaymentMirror(appointment.id, {
+      actorType,
+      actorId,
+      reason: cancelReason,
+      paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUND_PENDING,
+      payment: true,
+      metadata: {
+        refundRequired: true,
+        refundPercent: eligibility.refundPercent,
+        refundAmountCents: refundAmount,
+        reasonCode: eligibility.reasonCode,
+      },
+      transaction,
+    })
+
+    await writeRefundAudit({
+      appointmentId: appointment.id,
+      paymentTransactionId: payment.id,
+      action: actorAuditAction(actorType),
+      amount: refundAmount,
+      reason: cancelReason,
+      performedBy: actorType,
+      performedById: actorId,
+      metadata: { refundRequired: true, refundClaimed: true },
+      transaction,
+    })
 
     return {
       done: false,
+      appointment: cancelled,
       appointmentId: appointment.id,
       eligibility,
-      refund: refundResult.refund,
-      payment: refundResult.payment,
-      paymentMirrorStatus:
-        refundResult.payment.status === PAYMENT_STATUS.REFUNDED
-          ? APPOINTMENT_PAYMENT_STATUS.REFUNDED
-          : APPOINTMENT_PAYMENT_STATUS.REFUND_PENDING,
+      payment: payment.toJSON(),
+      refundAmount,
     }
-  })
-
-  if (phase1.failed) {
-    throw phase1.error
-  }
+  }, { operation: 'cancellation_phase1' })
 
   if (phase1.done) {
     if (!phase1.refundRequired) {
@@ -508,59 +545,184 @@ export const requestCancellation = async ({
     return phase1
   }
 
-  // ── Phase 2: cancel appointment after refund is safely committed ─────────
-  // Separated so a lifecycle failure cannot roll back a successful Stripe refund.
+  // AFTER COMMIT: Stripe is external and must not run while DB locks are held.
+  let refund
   try {
-    const cancelled = await sequelize.transaction(async (transaction) => {
-      return cancelWithPaymentMirror(phase1.appointmentId, {
-        actorType,
-        actorId,
-        reason: cancelReason,
-        paymentStatus: phase1.paymentMirrorStatus,
-        payment: phase1.paymentMirrorStatus !== APPOINTMENT_PAYMENT_STATUS.REFUNDED,
-        metadata: {
-          refundRequired: true,
-          refundPercent: phase1.eligibility.refundPercent,
-          refundAmountCents: phase1.eligibility.refundAmountCents,
-          stripeRefundId: phase1.refund?.id || null,
-          reasonCode: phase1.eligibility.reasonCode,
+    refund = await createStripeRefund({
+      payment: phase1.payment,
+      appointmentId: phase1.appointmentId,
+      amountCents: phase1.refundAmount,
+      actorType,
+      createRefundFn,
+    })
+  } catch (error) {
+    await withTransaction(async (transaction) => {
+      const payment = await StripePayment.findByPk(phase1.payment.id, {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      })
+      const appointment = await Appointment.findByPk(phase1.appointmentId, {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      })
+
+      await payment.update(
+        {
+          status: PAYMENT_STATUS.REFUND_FAILED,
+          refundStatus: 'failed',
+          refundReason: cancelReason || error.message,
+          activeAppointmentId: null,
         },
+        { transaction }
+      )
+      await appointment.update(
+        {
+          paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUND_FAILED,
+          payment: true,
+        },
+        { transaction }
+      )
+      await writeRefundAudit({
+        appointmentId: appointment.id,
+        paymentTransactionId: payment.id,
+        action: REFUND_AUDIT_ACTION.REFUND_FAILED,
+        amount: phase1.refundAmount,
+        reason: cancelReason || error.message,
+        performedBy: actorType,
+        performedById: actorId,
+        metadata: { error: error.message, retryable: true },
         transaction,
       })
-    })
+    }, { operation: 'record_refund_failure' })
 
-    logCancellation('info', 'Paid appointment cancelled with refund', {
-      appointmentId: cancelled.id,
-      paymentStatus: cancelled.paymentStatus,
-      refundRequired: true,
-      refundAmount: phase1.eligibility.refundAmountCents,
-      stripeRefundId: phase1.refund?.id || null,
-      refundResult: phase1.refund?.status || null,
-    })
-
-    const message =
-      phase1.paymentMirrorStatus === APPOINTMENT_PAYMENT_STATUS.REFUNDED
-        ? 'Appointment cancelled and payment refunded'
-        : 'Appointment cancelled; refund processing'
-
-    return {
-      appointment: cancelled,
-      refundRequired: true,
-      refund: phase1.refund,
-      payment: phase1.payment,
-      eligibility: phase1.eligibility,
-      message,
-      refundPending: phase1.paymentMirrorStatus === APPOINTMENT_PAYMENT_STATUS.REFUND_PENDING,
-    }
-  } catch (error) {
-    logCancellation('error', 'Refund created but appointment cancel failed', {
+    logCancellation('error', 'Refund failed after cancellation committed', {
       appointmentId: phase1.appointmentId,
-      paymentStatus: phase1.paymentMirrorStatus,
+      paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUND_FAILED,
       refundRequired: true,
-      stripeRefundId: phase1.refund?.id || null,
+      refundResult: 'failed',
       error: error.message,
     })
-    throw error
+    throw new RefundError(error.message || 'Stripe refund failed', {
+      statusCode: 502,
+      code: 'stripe_refund_failed',
+    })
+  }
+
+  // Reconcile Stripe's immediate response in a short DB-only transaction.
+  const reconciled = await withTransaction(async (transaction) => {
+    const payment = await StripePayment.findByPk(phase1.payment.id, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    })
+    const appointment = await Appointment.findByPk(phase1.appointmentId, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    })
+    const stripeStatus = refund.status || 'pending'
+    const paymentStatus =
+      stripeStatus === 'succeeded'
+        ? PAYMENT_STATUS.REFUNDED
+        : stripeStatus === 'failed' || stripeStatus === 'canceled'
+          ? PAYMENT_STATUS.REFUND_FAILED
+          : PAYMENT_STATUS.REFUND_PENDING
+    const appointmentPaymentStatus =
+      paymentStatus === PAYMENT_STATUS.REFUNDED
+        ? APPOINTMENT_PAYMENT_STATUS.REFUNDED
+        : paymentStatus === PAYMENT_STATUS.REFUND_FAILED
+          ? APPOINTMENT_PAYMENT_STATUS.REFUND_FAILED
+          : APPOINTMENT_PAYMENT_STATUS.REFUND_PENDING
+    const chargeId =
+      typeof refund.charge === 'string'
+        ? refund.charge
+        : refund.charge?.id || payment.stripeChargeId
+
+    await payment.update(
+      {
+        status: paymentStatus,
+        stripeRefundId: refund.id,
+        refundAmount: refund.amount ?? phase1.refundAmount,
+        refundStatus: stripeStatus,
+        refundReason: cancelReason,
+        stripeChargeId: chargeId || payment.stripeChargeId,
+        refundedAt: paymentStatus === PAYMENT_STATUS.REFUNDED ? new Date() : payment.refundedAt,
+        activeAppointmentId: null,
+      },
+      { transaction }
+    )
+    await appointment.update(
+      {
+        paymentStatus: appointmentPaymentStatus,
+        payment: appointmentPaymentStatus !== APPOINTMENT_PAYMENT_STATUS.REFUNDED,
+      },
+      { transaction }
+    )
+    await writeRefundAudit({
+      appointmentId: appointment.id,
+      paymentTransactionId: payment.id,
+      action:
+        paymentStatus === PAYMENT_STATUS.REFUND_FAILED
+          ? REFUND_AUDIT_ACTION.REFUND_FAILED
+          : REFUND_AUDIT_ACTION.REFUND_CREATED,
+      amount: refund.amount ?? phase1.refundAmount,
+      reason: cancelReason,
+      performedBy: actorType,
+      performedById: actorId,
+      stripeRefundId: refund.id,
+      metadata: {
+        stripeRefundStatus: stripeStatus,
+        retryable: paymentStatus === PAYMENT_STATUS.REFUND_FAILED,
+      },
+      transaction,
+    })
+    if (paymentStatus === PAYMENT_STATUS.REFUNDED) {
+      await writeRefundAudit({
+        appointmentId: appointment.id,
+        paymentTransactionId: payment.id,
+        action: REFUND_AUDIT_ACTION.REFUND_SUCCEEDED,
+        amount: refund.amount ?? phase1.refundAmount,
+        reason: cancelReason,
+        performedBy: ACTOR_TYPE.SYSTEM,
+        stripeRefundId: refund.id,
+        metadata: { source: 'refund_create_sync' },
+        transaction,
+      })
+    }
+
+    await appointment.reload({ transaction })
+    await payment.reload({ transaction })
+    return { appointment, payment, appointmentPaymentStatus }
+  }, { operation: 'reconcile_refund_create' })
+
+  if (reconciled.appointmentPaymentStatus === APPOINTMENT_PAYMENT_STATUS.REFUND_FAILED) {
+    throw new RefundError('Stripe refund failed', {
+      statusCode: 502,
+      code: 'stripe_refund_failed',
+    })
+  }
+
+  logCancellation('info', 'Paid appointment cancelled with refund', {
+    appointmentId: reconciled.appointment.id,
+    paymentStatus: reconciled.appointment.paymentStatus,
+    refundRequired: true,
+    refundAmount: phase1.refundAmount,
+    stripeRefundId: refund.id || null,
+    refundResult: refund.status || null,
+  })
+
+  const message =
+    reconciled.appointmentPaymentStatus === APPOINTMENT_PAYMENT_STATUS.REFUNDED
+      ? 'Appointment cancelled and payment refunded'
+      : 'Appointment cancelled; refund processing'
+
+  return {
+    appointment: reconciled.appointment,
+    refundRequired: true,
+    refund,
+    payment: reconciled.payment,
+    eligibility: phase1.eligibility,
+    message,
+    refundPending:
+      reconciled.appointmentPaymentStatus === APPOINTMENT_PAYMENT_STATUS.REFUND_PENDING,
   }
 }
 

@@ -12,6 +12,7 @@ import sequelize, { connectDB } from '../config/mysql.js'
 import Doctor from '../models/doctorModel.js'
 import DoctorPriceHistory from '../models/doctorPriceHistoryModel.js'
 import { getFeeLimits, normalizeFee } from '../services/pricingService.js'
+import { withTransaction } from '../utils/databaseTransaction.js'
 
 const FIX = process.argv.includes('--fix')
 
@@ -60,7 +61,8 @@ const main = async () => {
     if (!Number.isFinite(numeric) || numeric <= 0 || numeric < min) newFee = min
     else if (numeric > max) newFee = max
 
-    await sequelize.transaction(async (transaction) => {
+    // One doctor at a time: fee update + price history must commit or roll back together.
+    await withTransaction(async (transaction) => {
       await doc.update({ fees: newFee }, { transaction })
       await DoctorPriceHistory.create(
         {
@@ -72,7 +74,7 @@ const main = async () => {
         },
         { transaction }
       )
-    })
+    }, { operation: 'validate_doctor_fees_fix' })
 
     issue.remediatedTo = newFee
   }

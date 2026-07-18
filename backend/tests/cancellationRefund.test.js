@@ -1,7 +1,7 @@
 /**
  * Cancellation + refund reconciliation tests.
  */
-import { describe, test, expect, beforeAll, beforeEach } from '@jest/globals'
+import { describe, test, expect, beforeAll, beforeEach, jest } from '@jest/globals'
 import request from 'supertest'
 import bcrypt from 'bcrypt'
 import jwt from 'jsonwebtoken'
@@ -14,6 +14,7 @@ const stripe = new Stripe(STRIPE_SECRET)
 let app
 let User, Doctor, Appointment, StripePayment, StripeWebhookEvent, AppointmentHistory, RefundAudit
 let PAYMENT_STATUS, requestCancellation, ACTOR_TYPE, APPOINTMENT_STATUS
+let enqueueNotification, clearNotificationQueue, flushNotificationQueue
 
 beforeAll(async () => {
   process.env.NODE_ENV = 'test'
@@ -52,12 +53,16 @@ beforeAll(async () => {
   requestCancellation = cancel.requestCancellation
   ACTOR_TYPE = cancel.ACTOR_TYPE
   APPOINTMENT_STATUS = cancel.APPOINTMENT_STATUS
+  ;({ enqueueNotification, clearNotificationQueue, flushNotificationQueue } = await import(
+    '../services/notificationQueue.js'
+  ))
 
   await initServices()
   app = createApp()
 })
 
 beforeEach(async () => {
+  clearNotificationQueue()
   await RefundAudit.destroy({ where: {}, truncate: true })
   await StripePayment.destroy({ where: {}, truncate: true })
   await StripeWebhookEvent.destroy({ where: {}, truncate: true })
@@ -369,7 +374,7 @@ describe('Paid appointment cancellation + refund', () => {
     expect(payments).toHaveLength(0)
   })
 
-  test('Test 6: Stripe refund failure does not cancel appointment', async () => {
+  test('Test 6: Stripe refund failure keeps cancellation and marks refund retryable', async () => {
     const { appointment, payment } = await seedPaidAppointment({
       paymentIntentId: 'pi_fail_1',
     })
@@ -390,10 +395,19 @@ describe('Paid appointment cancellation + refund', () => {
 
     await appointment.reload()
     await payment.reload()
-    expect(appointment.status).toBe('CONFIRMED')
-    expect(appointment.cancelled).toBe(false)
+    expect(appointment.status).toBe('CANCELLED')
+    expect(appointment.cancelled).toBe(true)
+    expect(appointment.heldStartTime).toBeNull()
     expect(payment.status).toBe(PAYMENT_STATUS.REFUND_FAILED)
     expect(appointment.paymentStatus).toBe('refund_failed')
+
+    const failureAudit = await RefundAudit.findOne({
+      where: {
+        appointmentId: appointment.id,
+        action: 'REFUND_FAILED',
+      },
+    })
+    expect(failureAudit.metadata.retryable).toBe(true)
   })
 
   test('Test 7: duplicate refund request creates only one Stripe refund', async () => {
@@ -467,5 +481,120 @@ describe('Paid appointment cancellation + refund', () => {
     await appointment.reload()
     expect(payment.status).toBe(PAYMENT_STATUS.REFUND_FAILED)
     expect(appointment.paymentStatus).toBe('refund_failed')
+  })
+
+  test('completed appointment validation rolls back and leaves appointment unchanged', async () => {
+    const { appointment } = await seedPaidAppointment({ status: 'COMPLETED' })
+
+    await expect(
+      requestCancellation({
+        appointmentId: appointment.id,
+        actorType: ACTOR_TYPE.USER,
+        actorId: appointment.userId,
+        createRefundFn: mockRefundCreate(),
+        expireCheckout: false,
+      })
+    ).rejects.toMatchObject({ code: 'cannot_cancel_completed' })
+
+    await appointment.reload()
+    expect(appointment.status).toBe('COMPLETED')
+    expect(appointment.cancelled).toBe(false)
+  })
+
+  test('database failure during cancellation rolls back all cancellation writes', async () => {
+    const { appointment, payment } = await seedPaidAppointment()
+    const historySpy = jest
+      .spyOn(AppointmentHistory, 'create')
+      .mockRejectedValueOnce(new Error('forced_cancellation_db_failure'))
+    const createRefundFn = mockRefundCreate()
+
+    try {
+      await expect(
+        requestCancellation({
+          appointmentId: appointment.id,
+          actorType: ACTOR_TYPE.USER,
+          actorId: appointment.userId,
+          createRefundFn,
+          expireCheckout: false,
+        })
+      ).rejects.toThrow('forced_cancellation_db_failure')
+    } finally {
+      historySpy.mockRestore()
+    }
+
+    expect(createRefundFn.calls()).toBe(0)
+    await appointment.reload()
+    await payment.reload()
+    expect(appointment.status).toBe('CONFIRMED')
+    expect(appointment.cancelled).toBe(false)
+    expect(appointment.paymentStatus).toBe('paid')
+    expect(payment.status).toBe(PAYMENT_STATUS.PAID)
+    expect(await RefundAudit.count({ where: { appointmentId: appointment.id } })).toBe(0)
+  })
+
+  test('notification failure after commit does not undo cancellation', async () => {
+    const { appointment } = await seedPaidAppointment()
+    await appointment.update({ payment: false, paymentStatus: 'unpaid' })
+    await StripePayment.destroy({ where: { appointmentId: appointment.id } })
+
+    const result = await requestCancellation({
+      appointmentId: appointment.id,
+      actorType: ACTOR_TYPE.USER,
+      actorId: appointment.userId,
+      expireCheckout: false,
+    })
+
+    let attempts = 0
+    enqueueNotification({
+      type: 'appointment_cancelled',
+      meta: { appointmentId: appointment.id },
+      maxAttempts: 2,
+      handler: async () => {
+        attempts += 1
+        throw new Error('notification unavailable')
+      },
+    })
+    await flushNotificationQueue()
+
+    expect(attempts).toBe(2)
+    expect(result.appointment.status).toBe('CANCELLED')
+    await appointment.reload()
+    expect(appointment.status).toBe('CANCELLED')
+    expect(appointment.cancelled).toBe(true)
+  })
+
+  test('concurrent cancellation requests create one refund and one valid transition', async () => {
+    const { appointment, payment } = await seedPaidAppointment()
+    const createRefundFn = mockRefundCreate({ status: 'pending' })
+
+    const results = await Promise.allSettled([
+      requestCancellation({
+        appointmentId: appointment.id,
+        actorType: ACTOR_TYPE.ADMIN,
+        reason: 'Concurrent cancellation A',
+        createRefundFn,
+        expireCheckout: false,
+      }),
+      requestCancellation({
+        appointmentId: appointment.id,
+        actorType: ACTOR_TYPE.ADMIN,
+        reason: 'Concurrent cancellation B',
+        createRefundFn,
+        expireCheckout: false,
+      }),
+    ])
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
+    expect(results.find((result) => result.status === 'rejected').reason).toMatchObject({
+      code: 'already_cancelled',
+    })
+    expect(createRefundFn.calls()).toBe(1)
+
+    await appointment.reload()
+    await payment.reload()
+    expect(appointment.status).toBe('CANCELLED')
+    expect(payment.status).toBe(PAYMENT_STATUS.REFUND_PENDING)
+    expect(await AppointmentHistory.count({ where: { appointmentId: appointment.id } })).toBe(1)
   })
 })

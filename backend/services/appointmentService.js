@@ -366,6 +366,8 @@ export const rescheduleAppointment = async ({
 
   return withDoctorQueue(existing.docId, async () => {
     try {
+      // DB-only transaction: lock + validate + update. Notifications / external APIs
+      // must run after this managed transaction commits — never roll back on their failure.
       const appointment = await withTransaction(async (transaction) => {
         const locked = await lockAppointmentRow(appointmentId, transaction)
         if (!locked) {
@@ -421,6 +423,7 @@ export const rescheduleAppointment = async ({
 
       return appointment
     } catch (error) {
+      // Managed transaction already committed or rolled back — never call rollback here.
       if (isUniqueViolation(error)) {
         logScheduling('warn', 'unique_constraint_failure', {
           appointmentId,
