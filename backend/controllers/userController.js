@@ -3,7 +3,6 @@ import bcrypt from 'bcrypt'
 import crypto from 'crypto'
 import User from "../models/userModel.js";
 import Appointment from "../models/appointmentModel.js";
-import jwt from "jsonwebtoken";
 import { uploadImage } from '../utils/uploadImage.js';
 import { notifyAppointmentBooked, notifyAppointmentCancelled, notifyPasswordReset } from '../services/notificationService.js';
 import {
@@ -28,8 +27,13 @@ import {
     CancellationError,
     RefundError,
 } from '../services/cancellationService.js'
-
-const JWT_OPTIONS = { expiresIn: '7d' }
+import {
+    issueAuthTokens,
+    refreshAccessSession,
+    logoutSession,
+    revokeSessionsForUser,
+    JWT_ROLES,
+} from '../services/authSessionService.js'
 
 const syncPaymentFields = (appointment) => {
     const status = appointment.paymentStatus || (appointment.payment ? 'paid' : 'unpaid')
@@ -57,8 +61,9 @@ const registerUser = async (req, res) => {
 
         const user = await User.create({ name, email, password: hashedPassword })
 
-        const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, JWT_OPTIONS)
-        res.json({ success: true, token })
+        // Role is assigned server-side from registration context — never from the client body.
+        const tokens = await issueAuthTokens(res, { id: user.id, role: JWT_ROLES.PATIENT })
+        res.json({ success: true, ...tokens })
 
     } catch (error) {
         console.log(error)
@@ -81,11 +86,34 @@ const loginUser = async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password)
 
         if (isMatch) {
-            const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, JWT_OPTIONS)
-            res.json({ success: true, token })
+            const tokens = await issueAuthTokens(res, { id: user.id, role: JWT_ROLES.PATIENT })
+            res.json({ success: true, ...tokens })
         } else {
             res.status(401).json({ success: false, message: "Invalid credentials" })
         }
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
+const refreshUserToken = async (req, res) => {
+    try {
+        const result = await refreshAccessSession(req, res, JWT_ROLES.PATIENT)
+        if (!result.ok) {
+            return res.status(result.status).json({ success: false, message: result.message })
+        }
+        res.json(result.body)
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
+const logoutUser = async (req, res) => {
+    try {
+        const body = await logoutSession(req, res, JWT_ROLES.PATIENT)
+        res.json(body)
     } catch (error) {
         console.log(error)
         res.status(500).json({ success: false, message: error.message })
@@ -449,6 +477,9 @@ const resetPassword = async (req, res) => {
             { where: { id: user.id } }
         )
 
+        // Password change invalidates outstanding refresh sessions.
+        await revokeSessionsForUser({ userId: user.id, role: JWT_ROLES.PATIENT })
+
         res.json({ success: true, message: 'Password reset successful. You can login now.' })
     } catch (error) {
         console.log(error)
@@ -473,7 +504,7 @@ const contactUs = async (req, res) => {
 }
 
 export {
-    registerUser, loginUser, getProfile, updateProfile, bookAppointment,
+    registerUser, loginUser, refreshUserToken, logoutUser, getProfile, updateProfile, bookAppointment,
     listAppointment, cancelAppointment, paymentStripe, paymentStatus, verifyStripe,
     rescheduleAppointment, forgotPassword, resetPassword, contactUs,
 }

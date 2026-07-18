@@ -23,11 +23,23 @@ jobs:
       - run: npm test
         env:
           JWT_SECRET: test_secret
+          JWT_PATIENT_SECRET: test_patient_secret
+          JWT_DOCTOR_SECRET: test_doctor_secret
+          JWT_ADMIN_SECRET: test_admin_secret
+          ACCESS_TOKEN_EXPIRES: 15m
+          REFRESH_TOKEN_EXPIRES: 30d
+          JWT_ACCEPT_LEGACY: 'true'
           ADMIN_EMAIL: admin@test.com
           ADMIN_PASSWORD: password123
       - run: npm run test:integration
         env:
           JWT_SECRET: test_secret
+          JWT_PATIENT_SECRET: test_patient_secret
+          JWT_DOCTOR_SECRET: test_doctor_secret
+          JWT_ADMIN_SECRET: test_admin_secret
+          ACCESS_TOKEN_EXPIRES: 15m
+          REFRESH_TOKEN_EXPIRES: 30d
+          JWT_ACCEPT_LEGACY: 'true'
           ADMIN_EMAIL: admin@test.com
           ADMIN_PASSWORD: password123
 

@@ -1,6 +1,7 @@
 import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
+import cookieParser from 'cookie-parser'
 import rateLimit from 'express-rate-limit'
 import { connectDB } from './config/mysql.js'
 import connectCloudinary from './config/cloudinary.js'
@@ -21,6 +22,7 @@ export const createApp = () => {
         .map((o) => o.trim())
 
     app.use(helmet())
+    app.use(cookieParser())
 
     // Stripe webhooks require the raw body for signature verification.
     // Mount before express.json() so the payload is not parsed early.
@@ -56,10 +58,13 @@ export const createApp = () => {
 
     app.use('/api/user/login', authLimiter)
     app.use('/api/user/register', authLimiter)
+    app.use('/api/user/refresh', authLimiter)
     app.use('/api/user/forgot-password', authLimiter)
     app.use('/api/user/contact', authLimiter)
     app.use('/api/admin/login', authLimiter)
+    app.use('/api/admin/refresh', authLimiter)
     app.use('/api/doctor/login', authLimiter)
+    app.use('/api/doctor/refresh', authLimiter)
     app.use('/api/user/book-appointment', bookingLimiter)
     app.use('/api/user/reschedule-appointment', bookingLimiter)
 

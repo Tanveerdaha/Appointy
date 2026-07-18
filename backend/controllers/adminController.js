@@ -1,4 +1,3 @@
-import jwt from "jsonwebtoken";
 import { Op } from "sequelize";
 import Appointment from "../models/appointmentModel.js";
 import Doctor from "../models/doctorModel.js";
@@ -19,19 +18,52 @@ import {
   CancellationError,
   RefundError,
 } from "../services/cancellationService.js";
+import {
+  issueAuthTokens,
+  refreshAccessSession,
+  logoutSession,
+  JWT_ROLES,
+} from "../services/authSessionService.js";
 
-// API for admin login
+// API for admin login — role is assigned server-side after credential check.
 const loginAdmin = async (req, res) => {
     try {
         const { email, password } = req.body
 
         if (email === process.env.ADMIN_EMAIL && await verifyAdminPassword(password)) {
-            const token = jwt.sign({ role: 'admin', email }, process.env.JWT_SECRET, { expiresIn: '7d' })
-            res.json({ success: true, token })
+            const tokens = await issueAuthTokens(res, {
+              id: email,
+              role: JWT_ROLES.ADMIN,
+              extra: { email },
+            })
+            res.json({ success: true, ...tokens })
         } else {
             res.status(401).json({ success: false, message: "Invalid credentials" })
         }
 
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
+const refreshAdminToken = async (req, res) => {
+    try {
+        const result = await refreshAccessSession(req, res, JWT_ROLES.ADMIN)
+        if (!result.ok) {
+            return res.status(result.status).json({ success: false, message: result.message })
+        }
+        res.json(result.body)
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
+const logoutAdmin = async (req, res) => {
+    try {
+        const body = await logoutSession(req, res, JWT_ROLES.ADMIN)
+        res.json(body)
     } catch (error) {
         console.log(error)
         res.status(500).json({ success: false, message: error.message })
@@ -317,4 +349,4 @@ const deleteDoctor = async (req, res) => {
     }
 }
 
-export {loginAdmin, addDoctor, allDoctors, appointmentsAdmin, appointmentCancel, adminDashboard, appointmentComplete, updateDoctor, deleteDoctor, listUsers}
+export {loginAdmin, refreshAdminToken, logoutAdmin, addDoctor, allDoctors, appointmentsAdmin, appointmentCancel, adminDashboard, appointmentComplete, updateDoctor, deleteDoctor, listUsers}

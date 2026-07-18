@@ -16,6 +16,12 @@ const FUTURE_START = '2030-08-12T10:00:00+05:00'
 beforeAll(async () => {
   process.env.NODE_ENV = 'test'
   process.env.JWT_SECRET = 'test_jwt_secret'
+  process.env.JWT_PATIENT_SECRET = 'test_patient_secret'
+  process.env.JWT_DOCTOR_SECRET = 'test_doctor_secret'
+  process.env.JWT_ADMIN_SECRET = 'test_admin_secret'
+  process.env.ACCESS_TOKEN_EXPIRES = '15m'
+  process.env.REFRESH_TOKEN_EXPIRES = '30d'
+  process.env.JWT_ACCEPT_LEGACY = 'true'
   process.env.ADMIN_EMAIL = 'admin@test.com'
   process.env.ADMIN_PASSWORD = 'password123'
   process.env.DB_DIALECT = 'sqlite'
@@ -113,7 +119,16 @@ const loginDoctor = async (email) => {
 }
 
 const adminToken = () =>
-  jwt.sign({ role: 'admin', email: process.env.ADMIN_EMAIL }, process.env.JWT_SECRET, { expiresIn: '1h' })
+  jwt.sign(
+    { role: 'admin', email: process.env.ADMIN_EMAIL, tokenType: 'access' },
+    process.env.JWT_ADMIN_SECRET,
+    {
+      subject: process.env.ADMIN_EMAIL,
+      issuer: 'appointy-auth',
+      audience: 'appointy-admin-api',
+      expiresIn: '1h',
+    }
+  )
 
 describe('canTransition matrix', () => {
   test('allows documented transitions only', () => {

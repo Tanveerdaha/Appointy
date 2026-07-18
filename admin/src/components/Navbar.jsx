@@ -3,6 +3,7 @@ import { assets } from '../assets/assets'
 import { DoctorContext } from '../context/doctorContext'
 import { AdminContext } from '../context/adminContext'
 import { useNavigate, useLocation } from 'react-router-dom'
+import api from '../api/client.js'
 
 const Navbar = ({ onMenuOpen }) => {
   const { setDToken } = useContext(DoctorContext)
@@ -14,6 +15,8 @@ const Navbar = ({ onMenuOpen }) => {
   const isAdmin = !!(localStorage.getItem('aToken'))
 
   const logout = () => {
+    const path = isAdmin ? '/api/admin/logout' : '/api/doctor/logout'
+    api.post(path).catch(() => {})
     localStorage.removeItem('dToken')
     localStorage.removeItem('aToken')
     setDToken('')

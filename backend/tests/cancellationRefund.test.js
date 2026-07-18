@@ -18,6 +18,12 @@ let PAYMENT_STATUS, requestCancellation, ACTOR_TYPE, APPOINTMENT_STATUS
 beforeAll(async () => {
   process.env.NODE_ENV = 'test'
   process.env.JWT_SECRET = 'test_jwt_secret'
+  process.env.JWT_PATIENT_SECRET = 'test_patient_secret'
+  process.env.JWT_DOCTOR_SECRET = 'test_doctor_secret'
+  process.env.JWT_ADMIN_SECRET = 'test_admin_secret'
+  process.env.ACCESS_TOKEN_EXPIRES = '15m'
+  process.env.REFRESH_TOKEN_EXPIRES = '30d'
+  process.env.JWT_ACCEPT_LEGACY = 'true'
   process.env.ADMIN_EMAIL = 'admin@test.com'
   process.env.ADMIN_PASSWORD = 'password123'
   process.env.DB_DIALECT = 'sqlite'
@@ -263,8 +269,14 @@ describe('Paid appointment cancellation + refund', () => {
 
     // HTTP path also requires reason for paid
     const adminToken = jwt.sign(
-      { role: 'admin', email: process.env.ADMIN_EMAIL },
-      process.env.JWT_SECRET
+      { role: 'admin', email: process.env.ADMIN_EMAIL, tokenType: 'access' },
+      process.env.JWT_ADMIN_SECRET,
+      {
+        subject: process.env.ADMIN_EMAIL,
+        issuer: 'appointy-auth',
+        audience: 'appointy-admin-api',
+        expiresIn: '1h',
+      }
     )
     const paid2 = await seedPaidAppointment({
       startTime: new Date(Date.now() + 72 * 60 * 60 * 1000),

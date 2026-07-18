@@ -1,4 +1,3 @@
-import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import { Op, fn, col } from "sequelize";
 import Doctor from "../models/doctorModel.js";
@@ -14,8 +13,14 @@ import {
   CancellationError,
   RefundError,
 } from "../services/cancellationService.js";
+import {
+  issueAuthTokens,
+  refreshAccessSession,
+  logoutSession,
+  JWT_ROLES,
+} from "../services/authSessionService.js";
 
-// Doctor login
+// Doctor login — role is assigned server-side from the doctor table, never from the client.
 const loginDoctor = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -30,8 +35,31 @@ const loginDoctor = async (req, res) => {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
     }
 
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
-    res.json({ success: true, token });
+    const tokens = await issueAuthTokens(res, { id: user.id, role: JWT_ROLES.DOCTOR });
+    res.json({ success: true, ...tokens });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const refreshDoctorToken = async (req, res) => {
+  try {
+    const result = await refreshAccessSession(req, res, JWT_ROLES.DOCTOR);
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, message: result.message });
+    }
+    res.json(result.body);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const logoutDoctor = async (req, res) => {
+  try {
+    const body = await logoutSession(req, res, JWT_ROLES.DOCTOR);
+    res.json(body);
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: error.message });
@@ -251,6 +279,8 @@ const doctorDashboard = async (req, res) => {
 
 export {
   loginDoctor,
+  refreshDoctorToken,
+  logoutDoctor,
   appointmentsDoctor,
   appointmentCancel,
   appointmentComplete,

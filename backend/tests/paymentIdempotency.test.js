@@ -20,6 +20,12 @@ let createAppointmentPayment, PAYMENT_STATUS, ACTIVE_PAYMENT_STATUSES
 beforeAll(async () => {
     process.env.NODE_ENV = 'test'
     process.env.JWT_SECRET = 'test_jwt_secret'
+    process.env.JWT_PATIENT_SECRET = 'test_patient_secret'
+    process.env.JWT_DOCTOR_SECRET = 'test_doctor_secret'
+    process.env.JWT_ADMIN_SECRET = 'test_admin_secret'
+    process.env.ACCESS_TOKEN_EXPIRES = '15m'
+    process.env.REFRESH_TOKEN_EXPIRES = '30d'
+    process.env.JWT_ACCEPT_LEGACY = 'true'
     process.env.ADMIN_EMAIL = 'admin@test.com'
     process.env.ADMIN_PASSWORD = 'password123'
     process.env.DB_DIALECT = 'sqlite'

@@ -26,6 +26,8 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       NODE_ENV: production
+      # Force re-login for pre-claim JWTs in containerized production
+      JWT_ACCEPT_LEGACY: 'false'
     depends_on:
       mysql:
         condition: service_healthy

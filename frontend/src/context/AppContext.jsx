@@ -62,6 +62,7 @@ const AppContextProvider = (props) => {
     }, [])
 
     const logout = useCallback(() => {
+        api.post('/api/user/logout').catch(() => {})
         localStorage.removeItem('token')
         setToken('')
         setUserData(false)

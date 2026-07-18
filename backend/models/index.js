@@ -5,6 +5,7 @@ import AppointmentHistory from './appointmentHistoryModel.js'
 import StripeWebhookEvent from './stripeWebhookEventModel.js'
 import StripePayment from './stripePaymentModel.js'
 import RefundAudit from './refundAuditModel.js'
+import RefreshToken from './refreshTokenModel.js'
 
 User.hasMany(Appointment, { foreignKey: 'userId', onDelete: 'RESTRICT' })
 Doctor.hasMany(Appointment, { foreignKey: 'docId', onDelete: 'RESTRICT' })
@@ -32,4 +33,5 @@ export {
   StripeWebhookEvent,
   StripePayment,
   RefundAudit,
+  RefreshToken,
 }
