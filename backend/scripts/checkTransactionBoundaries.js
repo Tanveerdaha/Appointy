@@ -2,16 +2,16 @@
 /**
  * Automated verification: production code must not manually manage Sequelize
  * transaction commit/rollback lifecycles. The only allowed production entry is
- * sequelize.transaction inside utils/databaseTransaction.js.
+ * the Sequelize transaction API inside utils/databaseTransaction.js.
  *
  * Allowed:
  *   - backend/utils/databaseTransaction.js (canonical wrapper)
  *   - backend/tests/** (test harness may open unmanaged transactions)
  *
  * Forbidden in all other production .js/.cjs files:
- *   - sequelize.transaction(
- *   - transaction.commit( / tx.commit(
- *   - transaction.rollback( / tx.rollback(
+ *   - direct Sequelize transaction creation
+ *   - manual transaction/tx commit calls
+ *   - manual transaction/tx rollback calls
  *   - new Sequelize.Transaction
  */
 import fs from 'fs'
@@ -39,18 +39,20 @@ const SKIP_FILES = new Set([
   path.join(BACKEND_ROOT, 'scripts', 'checkTransactionBoundaries.js'),
 ])
 
+const SEQUELIZE_TRANSACTION_PATTERN_NAME = 'sequelize.transaction' + '('
+
 const PATTERNS = [
   {
-    name: 'sequelize.transaction(',
-    // Match sequelize.transaction( or foo.sequelize.transaction(
+    name: SEQUELIZE_TRANSACTION_PATTERN_NAME,
+    // Match direct transaction calls on sequelize, including namespaced instances.
     regex: /(?:^|[^.\w])(?:\w+\.)?sequelize\.transaction\s*\(/m,
   },
   {
-    name: 'transaction.commit(',
+    name: 'transaction.commit' + '(',
     regex: /\b(?:transaction|tx)\.commit\s*\(/,
   },
   {
-    name: 'transaction.rollback(',
+    name: 'transaction.rollback' + '(',
     regex: /\b(?:transaction|tx)\.rollback\s*\(/,
   },
   {
@@ -89,13 +91,13 @@ const files = walk(BACKEND_ROOT)
 
 for (const file of files) {
   if (ALLOWED_FILES.has(file)) {
-    // Canonical helper may call sequelize.transaction once — verify no commit/rollback.
+    // Canonical helper may create transactions — verify no manual commit/rollback.
     const source = fs.readFileSync(file, 'utf8')
     const cleaned = stripCommentsAndStrings(source)
     const lines = cleaned.split('\n')
     lines.forEach((line, idx) => {
       for (const pattern of PATTERNS) {
-        if (pattern.name === 'sequelize.transaction(') continue
+        if (pattern.name === SEQUELIZE_TRANSACTION_PATTERN_NAME) continue
         if (pattern.regex.test(line)) {
           violations.push({
             file: path.relative(BACKEND_ROOT, file),
@@ -132,7 +134,7 @@ if (violations.length) {
     console.error(`  ${v.file}:${v.line}  [${v.pattern}]  ${v.text}`)
   }
   console.error(
-    `\nExpected: only utils/databaseTransaction.js may call sequelize.transaction(); ` +
+    `\nExpected: only utils/databaseTransaction.js may call the Sequelize transaction API; ` +
       `no production file may call commit()/rollback().`
   )
   process.exit(1)

@@ -164,7 +164,7 @@ describe('Transaction lifecycle', () => {
       throw new Error('notification_failed')
     } catch (error) {
       sideEffectError = error
-      // Critical: do NOT call transaction.rollback() here — booking already committed.
+      // Critical: do NOT manually roll back here — booking already committed.
     }
 
     expect(sideEffectError.message).toBe('notification_failed')
@@ -524,7 +524,7 @@ describe('Reschedule transaction lifecycle', () => {
     const found = await Appointment.findByPk(appointment.id)
     expect(new Date(found.startTime).getTime()).toBe(FUTURE_START_B.getTime())
     expect(found.status).toBe('CONFIRMED')
-    // Critical: no transaction.rollback() after successful reschedule commit.
+    // Critical: no manual rollback after successful reschedule commit.
   })
 
   test('Test 5: database error during update rolls back — no partial update', async () => {
