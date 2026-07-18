@@ -557,11 +557,12 @@ export const requestCancellation = async ({
     })
   } catch (error) {
     await withTransaction(async (transaction) => {
-      const payment = await StripePayment.findByPk(phase1.payment.id, {
+      // Lock order: appointment → payment.
+      const appointment = await Appointment.findByPk(phase1.appointmentId, {
         transaction,
         lock: transaction.LOCK.UPDATE,
       })
-      const appointment = await Appointment.findByPk(phase1.appointmentId, {
+      const payment = await StripePayment.findByPk(phase1.payment.id, {
         transaction,
         lock: transaction.LOCK.UPDATE,
       })
@@ -610,11 +611,12 @@ export const requestCancellation = async ({
 
   // Reconcile Stripe's immediate response in a short DB-only transaction.
   const reconciled = await withTransaction(async (transaction) => {
-    const payment = await StripePayment.findByPk(phase1.payment.id, {
+    // Lock order: appointment → payment.
+    const appointment = await Appointment.findByPk(phase1.appointmentId, {
       transaction,
       lock: transaction.LOCK.UPDATE,
     })
-    const appointment = await Appointment.findByPk(phase1.appointmentId, {
+    const payment = await StripePayment.findByPk(phase1.payment.id, {
       transaction,
       lock: transaction.LOCK.UPDATE,
     })

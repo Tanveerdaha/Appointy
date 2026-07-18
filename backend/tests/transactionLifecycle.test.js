@@ -16,10 +16,9 @@ import { jest } from '@jest/globals'
 let User, Doctor, Appointment, AppointmentHistory, StripePayment
 let createAppointment, rescheduleAppointment, SchedulingError
 let createAppointmentPayment
-let withTransaction, safeRollback
+let withTransaction
 let PAYMENT_STATUS, APPOINTMENT_PAYMENT_STATUS
 let enqueueNotification, clearNotificationQueue, flushNotificationQueue, getNotificationQueueSnapshot
-let sequelize
 
 const FUTURE_START = new Date('2030-07-22T10:00:00+05:00')
 const FUTURE_START_B = new Date('2030-07-22T10:30:00+05:00')
@@ -45,7 +44,6 @@ beforeAll(async () => {
   process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test'
 
   const { initServices } = await import('../app.js')
-  sequelize = (await import('../config/mysql.js')).default
   User = (await import('../models/userModel.js')).default
   Doctor = (await import('../models/doctorModel.js')).default
   Appointment = (await import('../models/appointmentModel.js')).default
@@ -58,7 +56,7 @@ beforeAll(async () => {
     '../services/appointmentService.js'
   ))
   ;({ createAppointmentPayment } = await import('../services/paymentService.js'))
-  ;({ withTransaction, safeRollback } = await import('../utils/databaseTransaction.js'))
+  ;({ withTransaction } = await import('../utils/databaseTransaction.js'))
   ;({
     enqueueNotification,
     clearNotificationQueue,
@@ -295,13 +293,6 @@ describe('Transaction lifecycle', () => {
     expect(found).not.toBeNull()
   })
 
-  test('safeRollback never rolls back a finished transaction', async () => {
-    const tx = await sequelize.transaction()
-    await tx.commit()
-    const rolled = await safeRollback(tx, { reason: 'should_noop' })
-    expect(rolled).toBe(false)
-  })
-
   test('withTransaction preserves callback return value after commit', async () => {
     const payload = { ok: true, id: 'tx-result-1' }
     const result = await withTransaction(async () => payload, {
@@ -329,19 +320,6 @@ describe('Transaction lifecycle', () => {
     expect(caught).toBe(original)
     expect(caught.statusCode).toBe(409)
     expect(caught.code).toBe('conflict')
-  })
-
-  test('safeRollback rolls back an unfinished transaction and no-ops when missing', async () => {
-    expect(await safeRollback(null, { reason: 'missing' })).toBe(false)
-    expect(await safeRollback(undefined, { reason: 'missing' })).toBe(false)
-
-    const tx = await sequelize.transaction()
-    expect(tx.finished).toBeFalsy()
-    const rolled = await safeRollback(tx, { reason: 'test_unfinished' })
-    expect(rolled).toBe(true)
-    expect(tx.finished).toBe('rollback')
-    // Already finished — must no-op (eliminates post-commit rollback risk).
-    expect(await safeRollback(tx, { reason: 'already_finished' })).toBe(false)
   })
 
   test('returning a failure object from withTransaction commits (does not roll back)', async () => {

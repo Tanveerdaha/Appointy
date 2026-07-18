@@ -46,10 +46,16 @@ const isExpired = (payment, now) =>
 
 const markStripeCreationFailed = async ({ appointmentId, paymentId, error }) => {
     await withTransaction(async (transaction) => {
+        // Lock order: appointment → payment (consistent with prepare / cancellation).
+        const appointment = await Appointment.findByPk(appointmentId, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        })
         const payment = await StripePayment.findByPk(paymentId, {
             transaction,
             lock: transaction.LOCK.UPDATE,
         })
+
         if (payment && ACTIVE_PAYMENT_STATUSES.includes(payment.status)) {
             await payment.update(
                 {
@@ -60,12 +66,11 @@ const markStripeCreationFailed = async ({ appointmentId, paymentId, error }) => 
             )
         }
 
-        const appointment = await Appointment.findByPk(appointmentId, {
-            transaction,
-            lock: transaction.LOCK.UPDATE,
-        })
         if (
             appointment &&
+            appointment.status !== APPOINTMENT_STATUS.CANCELLED &&
+            appointment.status !== APPOINTMENT_STATUS.COMPLETED &&
+            appointment.status !== APPOINTMENT_STATUS.NO_SHOW &&
             !isAppointmentPaid(appointment) &&
             appointment.paymentStatus !== APPOINTMENT_PAYMENT_STATUS.PAID
         ) {
@@ -95,12 +100,52 @@ const saveCheckoutSession = async ({
     expiresAt,
 }) => {
     return withTransaction(async (transaction) => {
+        // Lock order: appointment → payment. Re-validate terminal / retired state so a
+        // cancel that committed between TX1 and Stripe cannot be overwritten here.
+        const appointment = await Appointment.findByPk(appointmentId, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        })
         const payment = await StripePayment.findByPk(paymentId, {
             transaction,
             lock: transaction.LOCK.UPDATE,
         })
         if (!payment) {
             throw new Error('Payment row missing after Stripe session create')
+        }
+
+        const appointmentTerminal =
+            !appointment ||
+            appointment.status === APPOINTMENT_STATUS.CANCELLED ||
+            appointment.status === APPOINTMENT_STATUS.COMPLETED ||
+            appointment.status === APPOINTMENT_STATUS.NO_SHOW
+
+        if (appointmentTerminal || !ACTIVE_PAYMENT_STATUSES.includes(payment.status)) {
+            logPayment('warn', 'checkout session discarded — appointment/payment no longer active', {
+                appointmentId,
+                paymentId,
+                appointmentStatus: appointment?.status || null,
+                paymentStatus: payment.status,
+                sessionId: session.id,
+            })
+            if (ACTIVE_PAYMENT_STATUSES.includes(payment.status)) {
+                await payment.update(
+                    {
+                        status: PAYMENT_STATUS.EXPIRED,
+                        activeAppointmentId: null,
+                        stripeCheckoutSessionId: session.id,
+                        checkoutUrl: session.url,
+                    },
+                    { transaction }
+                )
+            }
+            return {
+                ok: false,
+                code: 'appointment_not_found',
+                message: 'Appointment Cancelled or not found',
+                sessionId: session.id,
+                paymentId: payment.id,
+            }
         }
 
         await payment.update(
@@ -115,19 +160,13 @@ const saveCheckoutSession = async ({
             { transaction }
         )
 
-        const appointment = await Appointment.findByPk(appointmentId, {
-            transaction,
-            lock: transaction.LOCK.UPDATE,
-        })
-        if (appointment) {
-            await appointment.update(
-                {
-                    paymentStatus: APPOINTMENT_PAYMENT_STATUS.PENDING,
-                    stripeCheckoutSessionId: session.id,
-                },
-                { transaction }
-            )
-        }
+        await appointment.update(
+            {
+                paymentStatus: APPOINTMENT_PAYMENT_STATUS.PENDING,
+                stripeCheckoutSessionId: session.id,
+            },
+            { transaction }
+        )
 
         return {
             ok: true,

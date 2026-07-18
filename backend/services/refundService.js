@@ -120,25 +120,7 @@ export const verifyRefundEligibility = (payment) => {
   return true
 }
 
-/**
- * Create a Stripe refund for a locked PAID payment row.
- * Caller owns the transaction and must have already locked the payment.
- *
- * @returns {{ refund, payment }}
- */
-export const processStripeRefund = async ({
-  payment,
-  appointment,
-  amountCents,
-  reason,
-  actorType,
-  actorId = null,
-  auditAction = REFUND_AUDIT_ACTION.REFUND_CREATED,
-  createRefundFn = null,
-  transaction,
-}) => {
-  verifyRefundEligibility(payment)
-
+const resolveRefundAmount = (payment, amountCents) => {
   const refundAmount = Number.isFinite(amountCents) ? Math.round(amountCents) : payment.amount
   if (refundAmount <= 0) {
     throw new RefundError('Refund amount must be greater than zero', {
@@ -152,199 +134,56 @@ export const processStripeRefund = async ({
       code: 'refund_amount_exceeds_payment',
     })
   }
+  return refundAmount
+}
 
-  // Claim REFUND_PENDING before calling Stripe to block concurrent duplicates.
-  await payment.update(
-    {
-      status: PAYMENT_STATUS.REFUND_PENDING,
-      refundAmount,
-      refundStatus: 'pending',
-      refundReason: reason || null,
-      activeAppointmentId: null,
-    },
-    { transaction }
-  )
-
-  await appointment.update(
-    {
-      paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUND_PENDING,
-      // Keep payment=true until webhook confirms refunded — mirrors "money still held".
-      payment: true,
-    },
-    { transaction }
-  )
-
-  const idempotencyKey = `refund_${payment.appointmentId}_${payment.id}_${refundAmount}`
+const buildStripeRefundParams = ({ payment, appointmentId, amountCents, actorType }) => {
   const params = {
-    amount: refundAmount,
+    amount: amountCents,
     reason: 'requested_by_customer',
     metadata: {
-      appointmentId: String(appointment.id),
+      appointmentId: String(appointmentId),
       paymentId: String(payment.id),
       actorType: String(actorType || ''),
     },
   }
-
   if (payment.stripePaymentIntentId) {
     params.payment_intent = payment.stripePaymentIntentId
   } else {
     params.charge = payment.stripeChargeId
   }
+  return params
+}
 
-  let refund
-  try {
-    const createRefund =
-      createRefundFn ||
-      (async (p, opts) => {
-        const stripe = getStripe()
-        return stripe.refunds.create(p, opts)
-      })
-
-    // Stripe call outside DB lock would be safer for long waits, but we need
-    // REFUND_PENDING claimed first. Keep the call inside the tx; tests inject createRefundFn.
-    refund = await createRefund(params, { idempotencyKey })
-  } catch (error) {
-    await payment.update(
-      {
-        status: PAYMENT_STATUS.REFUND_FAILED,
-        refundStatus: 'failed',
-        refundReason: reason || error.message,
-        activeAppointmentId: null,
-      },
-      { transaction }
-    )
-    await appointment.update(
-      {
-        paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUND_FAILED,
-        payment: true,
-      },
-      { transaction }
-    )
-
-    await writeRefundAudit({
-      appointmentId: appointment.id,
-      paymentTransactionId: payment.id,
-      action: REFUND_AUDIT_ACTION.REFUND_FAILED,
-      amount: refundAmount,
-      reason: reason || error.message,
-      performedBy: actorType,
-      performedById: actorId,
-      metadata: { error: error.message, code: error.code || null },
-      transaction,
+const callStripeRefund = async ({
+  payment,
+  appointmentId,
+  amountCents,
+  actorType,
+  createRefundFn = null,
+}) => {
+  const createRefund =
+    createRefundFn ||
+    (async (p, opts) => {
+      const stripe = getStripe()
+      return stripe.refunds.create(p, opts)
     })
 
-    logRefund('error', 'Stripe refund create failed', {
-      appointmentId: appointment.id,
-      paymentId: payment.id,
-      paymentStatus: PAYMENT_STATUS.REFUND_FAILED,
-      refundRequired: true,
-      refundAmount,
-      error: error.message,
-    })
-
-    throw new RefundError(error.message || 'Stripe refund failed', {
-      statusCode: 502,
-      code: 'stripe_refund_failed',
-    })
-  }
-
-  const stripeStatus = refund.status || 'pending'
-  const chargeId =
-    typeof refund.charge === 'string' ? refund.charge : refund.charge?.id || payment.stripeChargeId
-
-  const fields = {
-    stripeRefundId: refund.id,
-    refundAmount: refund.amount ?? refundAmount,
-    refundStatus: stripeStatus,
-    refundReason: reason || null,
-    stripeChargeId: chargeId || payment.stripeChargeId,
-    activeAppointmentId: null,
-  }
-
-  if (stripeStatus === 'succeeded') {
-    fields.status = PAYMENT_STATUS.REFUNDED
-    fields.refundedAt = new Date()
-  } else if (stripeStatus === 'failed' || stripeStatus === 'canceled') {
-    fields.status = PAYMENT_STATUS.REFUND_FAILED
-  } else {
-    fields.status = PAYMENT_STATUS.REFUND_PENDING
-  }
-
-  await payment.update(fields, { transaction })
-
-  if (fields.status === PAYMENT_STATUS.REFUNDED) {
-    await appointment.update(
-      {
-        paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUNDED,
-        payment: false,
-      },
-      { transaction }
-    )
-  } else if (fields.status === PAYMENT_STATUS.REFUND_FAILED) {
-    await appointment.update(
-      {
-        paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUND_FAILED,
-        payment: true,
-      },
-      { transaction }
-    )
-  }
-
-  await writeRefundAudit({
-    appointmentId: appointment.id,
-    paymentTransactionId: payment.id,
-    action: auditAction,
-    amount: fields.refundAmount,
-    reason,
-    performedBy: actorType,
-    performedById: actorId,
-    stripeRefundId: refund.id,
-    metadata: { stripeRefundStatus: stripeStatus },
-    transaction,
+  return createRefund(buildStripeRefundParams({ payment, appointmentId, amountCents, actorType }), {
+    idempotencyKey: `refund_${appointmentId}_${payment.id}_${amountCents}`,
   })
-
-  if (fields.status === PAYMENT_STATUS.REFUNDED) {
-    await writeRefundAudit({
-      appointmentId: appointment.id,
-      paymentTransactionId: payment.id,
-      action: REFUND_AUDIT_ACTION.REFUND_SUCCEEDED,
-      amount: fields.refundAmount,
-      reason,
-      performedBy: 'SYSTEM',
-      stripeRefundId: refund.id,
-      metadata: { source: 'refund_create_sync' },
-      transaction,
-    })
-  }
-
-  logRefund('info', 'Stripe refund created', {
-    appointmentId: appointment.id,
-    paymentId: payment.id,
-    paymentStatus: fields.status,
-    refundRequired: true,
-    refundAmount: fields.refundAmount,
-    stripeRefundId: refund.id,
-    refundResult: stripeStatus,
-  })
-
-  await payment.reload({ transaction })
-  return { refund, payment }
 }
 
 /**
- * High-level: refund a paid appointment payment (used by cancellation + support).
+ * Phase 1 (DB only): lock appointment → payment, claim REFUND_PENDING.
+ * Stripe is intentionally NOT called here.
  */
-export const refundAppointmentPayment = async ({
+const claimRefundPending = async ({
   appointmentId,
   amountCents,
   reason,
-  actorType,
-  actorId = null,
-  auditAction,
-  createRefundFn = null,
-  transaction: outerTx = null,
 }) => {
-  const run = async (transaction) => {
+  return withTransaction(async (transaction) => {
     const appointment = await Appointment.findByPk(appointmentId, {
       transaction,
       lock: transaction.LOCK.UPDATE,
@@ -354,24 +193,319 @@ export const refundAppointmentPayment = async ({
     }
 
     const payment = await findPaidPayment(appointmentId, { transaction, lock: true })
-    return processStripeRefund({
-      payment,
-      appointment,
-      amountCents,
+    verifyRefundEligibility(payment)
+    const refundAmount = resolveRefundAmount(payment, amountCents)
+
+    await payment.update(
+      {
+        status: PAYMENT_STATUS.REFUND_PENDING,
+        refundAmount,
+        refundStatus: 'pending',
+        refundReason: reason || null,
+        activeAppointmentId: null,
+      },
+      { transaction }
+    )
+
+    await appointment.update(
+      {
+        paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUND_PENDING,
+        // Keep payment=true until webhook confirms refunded — mirrors "money still held".
+        payment: true,
+      },
+      { transaction }
+    )
+
+    await payment.reload({ transaction })
+    return {
+      appointmentId: appointment.id,
+      payment: payment.toJSON(),
+      refundAmount,
+    }
+  }, { operation: 'claim_refund_pending' })
+}
+
+/**
+ * Persist Stripe refund failure after the claim transaction already committed.
+ */
+const recordRefundFailure = async ({
+  appointmentId,
+  paymentId,
+  refundAmount,
+  reason,
+  actorType,
+  actorId,
+  error,
+}) => {
+  await withTransaction(async (transaction) => {
+    // Lock order: appointment → payment (consistent with claim / cancellation).
+    const appointment = await Appointment.findByPk(appointmentId, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    })
+    const payment = await StripePayment.findByPk(paymentId, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    })
+
+    if (payment) {
+      await payment.update(
+        {
+          status: PAYMENT_STATUS.REFUND_FAILED,
+          refundStatus: 'failed',
+          refundReason: reason || error.message,
+          activeAppointmentId: null,
+        },
+        { transaction }
+      )
+    }
+    if (appointment) {
+      await appointment.update(
+        {
+          paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUND_FAILED,
+          payment: true,
+        },
+        { transaction }
+      )
+    }
+
+    await writeRefundAudit({
+      appointmentId,
+      paymentTransactionId: paymentId,
+      action: REFUND_AUDIT_ACTION.REFUND_FAILED,
+      amount: refundAmount,
+      reason: reason || error.message,
+      performedBy: actorType,
+      performedById: actorId,
+      metadata: { error: error.message, code: error.code || null, retryable: true },
+      transaction,
+    })
+  }, { operation: 'record_refund_failure' })
+}
+
+/**
+ * Reconcile Stripe's immediate refund response in a short DB-only transaction.
+ */
+const reconcileRefundCreate = async ({
+  appointmentId,
+  paymentId,
+  refund,
+  refundAmount,
+  reason,
+  actorType,
+  actorId,
+  auditAction = REFUND_AUDIT_ACTION.REFUND_CREATED,
+}) => {
+  return withTransaction(async (transaction) => {
+    // Lock order: appointment → payment.
+    const appointment = await Appointment.findByPk(appointmentId, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    })
+    const payment = await StripePayment.findByPk(paymentId, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    })
+    if (!payment || !appointment) {
+      throw new RefundError('Payment or appointment missing during refund reconcile', {
+        statusCode: 500,
+        code: 'refund_reconcile_missing',
+      })
+    }
+
+    const stripeStatus = refund.status || 'pending'
+    const chargeId =
+      typeof refund.charge === 'string' ? refund.charge : refund.charge?.id || payment.stripeChargeId
+
+    const fields = {
+      stripeRefundId: refund.id,
+      refundAmount: refund.amount ?? refundAmount,
+      refundStatus: stripeStatus,
+      refundReason: reason || null,
+      stripeChargeId: chargeId || payment.stripeChargeId,
+      activeAppointmentId: null,
+    }
+
+    if (stripeStatus === 'succeeded') {
+      fields.status = PAYMENT_STATUS.REFUNDED
+      fields.refundedAt = new Date()
+    } else if (stripeStatus === 'failed' || stripeStatus === 'canceled') {
+      fields.status = PAYMENT_STATUS.REFUND_FAILED
+    } else {
+      fields.status = PAYMENT_STATUS.REFUND_PENDING
+    }
+
+    await payment.update(fields, { transaction })
+
+    if (fields.status === PAYMENT_STATUS.REFUNDED) {
+      await appointment.update(
+        {
+          paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUNDED,
+          payment: false,
+        },
+        { transaction }
+      )
+    } else if (fields.status === PAYMENT_STATUS.REFUND_FAILED) {
+      await appointment.update(
+        {
+          paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUND_FAILED,
+          payment: true,
+        },
+        { transaction }
+      )
+    }
+
+    await writeRefundAudit({
+      appointmentId: appointment.id,
+      paymentTransactionId: payment.id,
+      action:
+        fields.status === PAYMENT_STATUS.REFUND_FAILED
+          ? REFUND_AUDIT_ACTION.REFUND_FAILED
+          : auditAction,
+      amount: fields.refundAmount,
+      reason,
+      performedBy: actorType,
+      performedById: actorId,
+      stripeRefundId: refund.id,
+      metadata: {
+        stripeRefundStatus: stripeStatus,
+        retryable: fields.status === PAYMENT_STATUS.REFUND_FAILED,
+      },
+      transaction,
+    })
+
+    if (fields.status === PAYMENT_STATUS.REFUNDED) {
+      await writeRefundAudit({
+        appointmentId: appointment.id,
+        paymentTransactionId: payment.id,
+        action: REFUND_AUDIT_ACTION.REFUND_SUCCEEDED,
+        amount: fields.refundAmount,
+        reason,
+        performedBy: 'SYSTEM',
+        stripeRefundId: refund.id,
+        metadata: { source: 'refund_create_sync' },
+        transaction,
+      })
+    }
+
+    await payment.reload({ transaction })
+    return { refund, payment, status: fields.status }
+  }, { operation: 'reconcile_refund_create' })
+}
+
+/**
+ * Service-owned refund flow:
+ *   TX1 (DB): claim REFUND_PENDING
+ *   AFTER COMMIT: Stripe refunds.create (external)
+ *   TX2 (DB): reconcile success OR record retryable failure
+ *
+ * Does not accept a caller transaction — Stripe must never run inside an open DB tx.
+ *
+ * @returns {{ refund, payment }}
+ */
+export const processStripeRefund = async ({
+  appointmentId,
+  amountCents,
+  reason,
+  actorType,
+  actorId = null,
+  auditAction = REFUND_AUDIT_ACTION.REFUND_CREATED,
+  createRefundFn = null,
+}) => {
+  const claimed = await claimRefundPending({
+    appointmentId,
+    amountCents,
+    reason,
+  })
+
+  let refund
+  try {
+    // AFTER COMMIT: external Stripe call — cannot participate in DB rollback.
+    refund = await callStripeRefund({
+      payment: claimed.payment,
+      appointmentId: claimed.appointmentId,
+      amountCents: claimed.refundAmount,
+      actorType,
+      createRefundFn,
+    })
+  } catch (error) {
+    await recordRefundFailure({
+      appointmentId: claimed.appointmentId,
+      paymentId: claimed.payment.id,
+      refundAmount: claimed.refundAmount,
       reason,
       actorType,
       actorId,
-      auditAction,
-      createRefundFn,
-      transaction,
+      error,
+    })
+
+    logRefund('error', 'Stripe refund create failed after claim committed', {
+      appointmentId: claimed.appointmentId,
+      paymentId: claimed.payment.id,
+      paymentStatus: PAYMENT_STATUS.REFUND_FAILED,
+      refundRequired: true,
+      refundAmount: claimed.refundAmount,
+      error: error.message,
+    })
+
+    throw new RefundError(error.message || 'Stripe refund failed', {
+      statusCode: 502,
+      code: 'stripe_refund_failed',
     })
   }
 
-  if (outerTx) return run(outerTx)
+  const reconciled = await reconcileRefundCreate({
+    appointmentId: claimed.appointmentId,
+    paymentId: claimed.payment.id,
+    refund,
+    refundAmount: claimed.refundAmount,
+    reason,
+    actorType,
+    actorId,
+    auditAction,
+  })
 
-  // Join caller's transaction when provided; otherwise own a managed transaction.
-  return withTransaction(async (transaction) => run(transaction), {
-    operation: 'refund_appointment_payment',
+  if (reconciled.status === PAYMENT_STATUS.REFUND_FAILED) {
+    throw new RefundError('Stripe refund failed', {
+      statusCode: 502,
+      code: 'stripe_refund_failed',
+    })
+  }
+
+  logRefund('info', 'Stripe refund created', {
+    appointmentId: claimed.appointmentId,
+    paymentId: claimed.payment.id,
+    paymentStatus: reconciled.status,
+    refundRequired: true,
+    refundAmount: claimed.refundAmount,
+    stripeRefundId: refund.id,
+    refundResult: refund.status || null,
+  })
+
+  return { refund: reconciled.refund, payment: reconciled.payment }
+}
+
+/**
+ * High-level: refund a paid appointment payment (support / standalone).
+ * Always owns its own transaction phases — never joins a caller transaction.
+ */
+export const refundAppointmentPayment = async ({
+  appointmentId,
+  amountCents,
+  reason,
+  actorType,
+  actorId = null,
+  auditAction,
+  createRefundFn = null,
+}) => {
+  return processStripeRefund({
+    appointmentId,
+    amountCents,
+    reason,
+    actorType,
+    actorId,
+    auditAction,
+    createRefundFn,
   })
 }
 
@@ -399,32 +533,30 @@ export const updateRefundStatus = async ({
       return { status: 'ignored', message: 'Missing refund identifiers' }
     }
 
-    let payment = null
+    // Probe without row lock to discover appointmentId, then lock appointment → payment.
+    let paymentProbe = null
     if (refundId) {
-      payment = await StripePayment.findOne({
+      paymentProbe = await StripePayment.findOne({
         where: { stripeRefundId: refundId },
         transaction,
-        lock: transaction.LOCK.UPDATE,
       })
     }
-    if (!payment && paymentIntentId) {
-      payment = await StripePayment.findOne({
+    if (!paymentProbe && paymentIntentId) {
+      paymentProbe = await StripePayment.findOne({
         where: { stripePaymentIntentId: paymentIntentId },
         transaction,
-        lock: transaction.LOCK.UPDATE,
         order: [['createdAt', 'DESC']],
       })
     }
-    if (!payment && chargeId) {
-      payment = await StripePayment.findOne({
+    if (!paymentProbe && chargeId) {
+      paymentProbe = await StripePayment.findOne({
         where: { stripeChargeId: chargeId },
         transaction,
-        lock: transaction.LOCK.UPDATE,
         order: [['createdAt', 'DESC']],
       })
     }
 
-    if (!payment) {
+    if (!paymentProbe) {
       logRefund('warn', 'refund event with no matching payment record', {
         paymentIntentId,
         chargeId,
@@ -434,10 +566,18 @@ export const updateRefundStatus = async ({
       return { status: 'ignored', message: 'Payment record not found' }
     }
 
-    const appointment = await Appointment.findByPk(payment.appointmentId, {
+    const appointment = await Appointment.findByPk(paymentProbe.appointmentId, {
       transaction,
       lock: transaction.LOCK.UPDATE,
     })
+    const payment = await StripePayment.findByPk(paymentProbe.id, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    })
+
+    if (!payment) {
+      return { status: 'ignored', message: 'Payment record not found' }
+    }
 
     const normalized = String(refundStatus || '').toLowerCase()
     const isFailed = normalized === 'failed' || normalized === 'canceled'

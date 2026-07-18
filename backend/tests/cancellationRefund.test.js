@@ -15,6 +15,7 @@ let app
 let User, Doctor, Appointment, StripePayment, StripeWebhookEvent, AppointmentHistory, RefundAudit
 let PAYMENT_STATUS, requestCancellation, ACTOR_TYPE, APPOINTMENT_STATUS
 let enqueueNotification, clearNotificationQueue, flushNotificationQueue
+let refundAppointmentPayment, withTransaction
 
 beforeAll(async () => {
   process.env.NODE_ENV = 'test'
@@ -56,6 +57,8 @@ beforeAll(async () => {
   ;({ enqueueNotification, clearNotificationQueue, flushNotificationQueue } = await import(
     '../services/notificationQueue.js'
   ))
+  ;({ refundAppointmentPayment } = await import('../services/refundService.js'))
+  ;({ withTransaction } = await import('../utils/databaseTransaction.js'))
 
   await initServices()
   app = createApp()
@@ -596,5 +599,84 @@ describe('Paid appointment cancellation + refund', () => {
     expect(appointment.status).toBe('CANCELLED')
     expect(payment.status).toBe(PAYMENT_STATUS.REFUND_PENDING)
     expect(await AppointmentHistory.count({ where: { appointmentId: appointment.id } })).toBe(1)
+  })
+})
+
+describe('Standalone refundAppointmentPayment transaction boundaries', () => {
+  test('claims REFUND_PENDING before Stripe and keeps claim if Stripe fails', async () => {
+    const { appointment, payment } = await seedPaidAppointment({
+      paymentIntentId: 'pi_standalone_fail',
+    })
+
+    let sawClaimBeforeStripe = false
+    const createRefundFn = async () => {
+      await payment.reload()
+      sawClaimBeforeStripe = payment.status === PAYMENT_STATUS.REFUND_PENDING
+      throw Object.assign(new Error('stripe_down'), { code: 'stripe_unavailable' })
+    }
+
+    await expect(
+      refundAppointmentPayment({
+        appointmentId: appointment.id,
+        amountCents: payment.amount,
+        reason: 'Support refund',
+        actorType: ACTOR_TYPE.ADMIN,
+        actorId: null,
+        createRefundFn,
+      })
+    ).rejects.toMatchObject({ code: 'stripe_refund_failed' })
+
+    expect(sawClaimBeforeStripe).toBe(true)
+    await payment.reload()
+    await appointment.reload()
+    expect(payment.status).toBe(PAYMENT_STATUS.REFUND_FAILED)
+    expect(appointment.paymentStatus).toBe('refund_failed')
+    expect(appointment.status).toBe('CONFIRMED')
+
+    const failureAudit = await RefundAudit.findOne({
+      where: { appointmentId: appointment.id, action: 'REFUND_FAILED' },
+    })
+    expect(failureAudit).not.toBeNull()
+    expect(failureAudit.metadata.retryable).toBe(true)
+  })
+
+  test('Stripe runs outside an open DB transaction and reconcile commits atomically', async () => {
+    const { appointment, payment } = await seedPaidAppointment({
+      paymentIntentId: 'pi_standalone_ok',
+    })
+
+    let openManagedTxDuringStripe = false
+    const createRefundFn = async (params, options) => {
+      // If Stripe were inside withTransaction, a nested managed tx would still work,
+      // but we assert the claim already committed by reading outside any callback lock.
+      await payment.reload()
+      expect(payment.status).toBe(PAYMENT_STATUS.REFUND_PENDING)
+      expect(options.idempotencyKey).toMatch(/^refund_/)
+      // Opening another withTransaction during Stripe proves the claim tx is finished.
+      await withTransaction(async () => 'nested_ok', { operation: 'probe_after_claim' })
+      openManagedTxDuringStripe = true
+      return {
+        id: 're_standalone_ok',
+        object: 'refund',
+        amount: params.amount,
+        status: 'succeeded',
+        payment_intent: params.payment_intent,
+        charge: 'ch_standalone',
+      }
+    }
+
+    const result = await refundAppointmentPayment({
+      appointmentId: appointment.id,
+      amountCents: payment.amount,
+      reason: 'Support refund',
+      actorType: ACTOR_TYPE.ADMIN,
+      createRefundFn,
+    })
+
+    expect(openManagedTxDuringStripe).toBe(true)
+    expect(result.payment.status).toBe(PAYMENT_STATUS.REFUNDED)
+    await appointment.reload()
+    expect(appointment.paymentStatus).toBe('refunded')
+    expect(appointment.payment).toBe(false)
   })
 })

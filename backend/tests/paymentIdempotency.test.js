@@ -16,6 +16,8 @@ const stripe = new Stripe(STRIPE_SECRET)
 let app
 let User, Doctor, Appointment, StripePayment, StripeWebhookEvent, AppointmentHistory
 let createAppointmentPayment, PAYMENT_STATUS, ACTIVE_PAYMENT_STATUSES
+let requestCancellation, ACTOR_TYPE
+let markAppointmentPaidFromCheckoutSession
 
 beforeAll(async () => {
     process.env.NODE_ENV = 'test'
@@ -46,6 +48,8 @@ beforeAll(async () => {
     PAYMENT_STATUS = paymentModel.PAYMENT_STATUS
     ACTIVE_PAYMENT_STATUSES = paymentModel.ACTIVE_PAYMENT_STATUSES
     ;({ createAppointmentPayment } = await import('../services/paymentService.js'))
+    ;({ requestCancellation, ACTOR_TYPE } = await import('../services/cancellationService.js'))
+    ;({ markAppointmentPaidFromCheckoutSession } = await import('../services/stripePaymentService.js'))
 
     await initServices()
     app = createApp()
@@ -374,5 +378,135 @@ describe('Webhook duplicate handling with StripePayment', () => {
 
         const totalCount = await StripePayment.count({ where: { appointmentId: appointment.id } })
         expect(totalCount).toBe(1)
+    })
+
+    test('concurrent webhook + browser verification pays appointment exactly once', async () => {
+        const { user, appointment } = await seedAppointment({ paymentStatus: 'pending' })
+        await StripePayment.create({
+            appointmentId: appointment.id,
+            userId: user.id,
+            amount: 50000,
+            currency: 'pkr',
+            status: PAYMENT_STATUS.CHECKOUT_CREATED,
+            stripeCheckoutSessionId: 'cs_race_verify',
+            checkoutUrl: 'https://checkout.stripe.test/race',
+            expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+        })
+        await appointment.update({
+            stripeCheckoutSessionId: 'cs_race_verify',
+            status: 'PENDING_PAYMENT',
+            paymentStatus: 'pending',
+        })
+
+        const session = {
+            id: 'cs_race_verify',
+            object: 'checkout.session',
+            payment_status: 'paid',
+            amount_total: 50000,
+            currency: 'pkr',
+            payment_intent: 'pi_race_verify',
+            metadata: { appointmentId: String(appointment.id), userId: String(user.id) },
+        }
+
+        const [webhookRes, verifyRes] = await Promise.all([
+            postWebhook(buildEvent('checkout.session.completed', session, 'evt_race_verify')),
+            markAppointmentPaidFromCheckoutSession({
+                session,
+                expectedUserId: user.id,
+            }),
+        ])
+
+        expect(webhookRes.status).toBe(200)
+        expect(['paid', 'already_paid', 'duplicate']).toContain(verifyRes.status)
+
+        await appointment.reload()
+        expect(appointment.paymentStatus).toBe('paid')
+        expect(appointment.payment).toBe(true)
+
+        const paidCount = await StripePayment.count({
+            where: { appointmentId: appointment.id, status: PAYMENT_STATUS.PAID },
+        })
+        expect(paidCount).toBe(1)
+    })
+})
+
+describe('Checkout persistence races', () => {
+    test('concurrent createAppointmentPayment yields one active payment', async () => {
+        const { user, appointment } = await seedAppointment()
+        const { calls, createSession } = makeFakeStripe({ delayMs: 30 })
+
+        const [a, b] = await Promise.all([
+            createAppointmentPayment({ appointmentId: appointment.id, userId: user.id }, { createSession }),
+            createAppointmentPayment({ appointmentId: appointment.id, userId: user.id }, { createSession }),
+        ])
+
+        expect(a.ok).toBe(true)
+        expect(b.ok).toBe(true)
+        // Same payment row / idempotency key → at most one Stripe create, or both reuse.
+        expect(calls.length).toBeLessThanOrEqual(2)
+        expect(a.sessionId === b.sessionId || a.existingPayment || b.existingPayment).toBe(true)
+
+        const activeCount = await StripePayment.count({
+            where: { appointmentId: appointment.id, status: ACTIVE_PAYMENT_STATUSES },
+        })
+        expect(activeCount).toBe(1)
+    })
+
+    test('cancel between prepare and saveCheckoutSession does not revive cancelled appointment', async () => {
+        const { user, appointment } = await seedAppointment()
+
+        let releaseStripe
+        const stripeGate = new Promise((resolve) => {
+            releaseStripe = resolve
+        })
+
+        const createSession = async (appt, userId, options = {}) => {
+            await stripeGate
+            return {
+                id: `cs_after_cancel_${appt.id}`,
+                url: `https://checkout.stripe.test/after-cancel/${appt.id}`,
+                expires_at: options.expiresAt
+                    ? Math.floor(options.expiresAt.getTime() / 1000)
+                    : undefined,
+            }
+        }
+
+        const paymentPromise = createAppointmentPayment(
+            { appointmentId: appointment.id, userId: user.id },
+            { createSession }
+        )
+
+        // Wait until TX1 has committed a CREATED payment row, then cancel.
+        let paymentRow = null
+        for (let i = 0; i < 40; i += 1) {
+            paymentRow = await StripePayment.findOne({
+                where: { appointmentId: appointment.id, status: PAYMENT_STATUS.CREATED },
+            })
+            if (paymentRow) break
+            await new Promise((r) => setTimeout(r, 25))
+        }
+        expect(paymentRow).not.toBeNull()
+
+        await requestCancellation({
+            appointmentId: appointment.id,
+            actorType: ACTOR_TYPE.USER,
+            actorId: user.id,
+            expireCheckout: false,
+        })
+
+        releaseStripe()
+        const result = await paymentPromise
+
+        expect(result.ok).toBe(false)
+        expect(result.code).toBe('appointment_not_found')
+
+        await appointment.reload()
+        expect(appointment.status).toBe('CANCELLED')
+        expect(appointment.paymentStatus).not.toBe('pending')
+
+        const activeCount = await StripePayment.count({
+            where: { appointmentId: appointment.id, status: ACTIVE_PAYMENT_STATUSES },
+        })
+        expect(activeCount).toBe(0)
     })
 })

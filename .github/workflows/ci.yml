@@ -20,6 +20,7 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
+      - run: npm run check:transactions
       - run: npm test
         env:
           JWT_SECRET: test_secret
