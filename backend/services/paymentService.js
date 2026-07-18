@@ -1,8 +1,8 @@
-import sequelize from '../config/mysql.js'
 import Appointment from '../models/appointmentModel.js'
 import StripePayment, {
     PAYMENT_STATUS,
     ACTIVE_PAYMENT_STATUSES,
+    APPOINTMENT_PAYMENT_STATUS,
 } from '../models/stripePaymentModel.js'
 import {
     createStripeCheckoutSession,
@@ -12,6 +12,7 @@ import {
 import {
     APPOINTMENT_STATUS,
 } from './appointmentStateService.js'
+import { withTransaction } from '../utils/databaseTransaction.js'
 
 const logPayment = (level, message, meta = {}) => {
     const payload = { service: 'paymentService', ...meta }
@@ -43,17 +44,112 @@ export const buildIdempotencyKey = (appointmentId, paymentId) =>
 const isExpired = (payment, now) =>
     payment.expiresAt instanceof Date && payment.expiresAt.getTime() <= now.getTime()
 
+const markStripeCreationFailed = async ({ appointmentId, paymentId, error }) => {
+    await withTransaction(async (transaction) => {
+        const payment = await StripePayment.findByPk(paymentId, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        })
+        if (payment && ACTIVE_PAYMENT_STATUSES.includes(payment.status)) {
+            await payment.update(
+                {
+                    status: PAYMENT_STATUS.FAILED,
+                    activeAppointmentId: null,
+                },
+                { transaction }
+            )
+        }
+
+        const appointment = await Appointment.findByPk(appointmentId, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        })
+        if (
+            appointment &&
+            !isAppointmentPaid(appointment) &&
+            appointment.paymentStatus !== APPOINTMENT_PAYMENT_STATUS.PAID
+        ) {
+            await appointment.update(
+                { paymentStatus: APPOINTMENT_PAYMENT_STATUS.PENDING_RETRY },
+                { transaction }
+            )
+        }
+    }, { operation: 'mark_stripe_creation_failed' })
+
+    logPayment('error', 'Stripe checkout creation failed — appointment retained for retry', {
+        appointmentId,
+        paymentId,
+        paymentStatus: APPOINTMENT_PAYMENT_STATUS.PENDING_RETRY,
+        error: error?.message || String(error),
+    })
+}
+
+/**
+ * Persist Stripe session details after the external API call succeeds.
+ * Runs in its own transaction — never inside the Stripe HTTP call window.
+ */
+const saveCheckoutSession = async ({
+    appointmentId,
+    paymentId,
+    session,
+    expiresAt,
+}) => {
+    return withTransaction(async (transaction) => {
+        const payment = await StripePayment.findByPk(paymentId, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        })
+        if (!payment) {
+            throw new Error('Payment row missing after Stripe session create')
+        }
+
+        await payment.update(
+            {
+                stripeCheckoutSessionId: session.id,
+                checkoutUrl: session.url,
+                status: PAYMENT_STATUS.CHECKOUT_CREATED,
+                expiresAt: session.expires_at
+                    ? new Date(session.expires_at * 1000)
+                    : expiresAt,
+            },
+            { transaction }
+        )
+
+        const appointment = await Appointment.findByPk(appointmentId, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        })
+        if (appointment) {
+            await appointment.update(
+                {
+                    paymentStatus: APPOINTMENT_PAYMENT_STATUS.PENDING,
+                    stripeCheckoutSessionId: session.id,
+                },
+                { transaction }
+            )
+        }
+
+        return {
+            ok: true,
+            existingPayment: false,
+            sessionUrl: session.url,
+            sessionId: session.id,
+            paymentId: payment.id,
+        }
+    }, { operation: 'save_checkout_session' })
+}
+
 /**
  * Core payment-creation service shared by the direct booking flow (payMode=now)
  * and the standalone "Pay with Stripe" endpoint.
  *
- * Guarantees a single active Stripe Checkout Session per appointment:
- *   BEGIN
- *     lock appointment row (FOR UPDATE)
- *     reject if missing / cancelled / not owned / already paid
- *     reuse active non-expired StripePayment session if present
- *     otherwise create a StripePayment row + Stripe session (idempotency key)
- *   COMMIT
+ * Transaction boundaries:
+ *   TX1 (DB only): lock appointment, validate, reuse or create StripePayment row
+ *   AFTER COMMIT: create Stripe Checkout Session (external)
+ *   TX2 (DB only): persist session URL / mark FAILED + pending_retry on failure
+ *
+ * Guarantees a single active Stripe Checkout Session per appointment.
+ * Stripe failures never roll back the appointment — paymentStatus becomes pending_retry.
  *
  * @param {object} args
  * @param {string} args.appointmentId
@@ -66,8 +162,8 @@ export const createAppointmentPayment = async (
     { appointmentId, userId },
     { createSession = createStripeCheckoutSession, now = () => new Date() } = {}
 ) => {
-    const run = () =>
-        sequelize.transaction(async (transaction) => {
+    const preparePayment = () =>
+        withTransaction(async (transaction) => {
             const appointment = await Appointment.findByPk(appointmentId, {
                 transaction,
                 lock: transaction.LOCK.UPDATE,
@@ -118,9 +214,26 @@ export const createAppointmentPayment = async (
                     }
                 }
 
+                // CREATED without a session yet — reuse the row so concurrent callers
+                // share the same idempotency key after commit.
+                if (!expired && !activePayment.stripeCheckoutSessionId) {
+                    const amount = getExpectedAmountCents(appointment)
+                    const currency = getCurrency(appointment)
+                    const expiresAt = new Date(nowDate.getTime() + EXPIRY_MS)
+                    return {
+                        ok: true,
+                        needsStripe: true,
+                        existingPayment: false,
+                        appointmentId: appointment.id,
+                        paymentId: activePayment.id,
+                        amount,
+                        currency,
+                        expiresAt,
+                        userId,
+                    }
+                }
+
                 // Expired (or never reached Stripe) — retire it before creating a new one.
-                // activeAppointmentId must be cleared explicitly: instance.update()
-                // only persists the columns passed to it, bypassing the hook's write.
                 await activePayment.update(
                     { status: PAYMENT_STATUS.EXPIRED, activeAppointmentId: null },
                     { transaction }
@@ -148,65 +261,104 @@ export const createAppointmentPayment = async (
                 { transaction }
             )
 
-            const idempotencyKey = buildIdempotencyKey(appointmentId, payment.id)
             const expiresAt = new Date(nowDate.getTime() + EXPIRY_MS)
-
-            const session = await createSession(appointment, userId, {
-                idempotencyKey,
-                expiresAt,
-                paymentId: payment.id,
-            })
-
-            logPayment('info', 'new checkout session created with idempotency key', {
-                appointmentId,
-                paymentId: payment.id,
-                sessionId: session.id,
-                idempotencyKey,
-            })
-
-            await payment.update(
-                {
-                    stripeCheckoutSessionId: session.id,
-                    checkoutUrl: session.url,
-                    status: PAYMENT_STATUS.CHECKOUT_CREATED,
-                    expiresAt: session.expires_at
-                        ? new Date(session.expires_at * 1000)
-                        : expiresAt,
-                },
-                { transaction }
-            )
-
-            // Keep the appointment row in sync for backward compatibility with
-            // existing doctor/admin views and the webhook reconciliation path.
-            await appointment.update(
-                {
-                    paymentStatus: 'pending',
-                    stripeCheckoutSessionId: session.id,
-                },
-                { transaction }
-            )
 
             return {
                 ok: true,
+                needsStripe: true,
                 existingPayment: false,
-                sessionUrl: session.url,
-                sessionId: session.id,
+                appointmentId: appointment.id,
                 paymentId: payment.id,
+                amount,
+                currency,
+                expiresAt,
+                userId,
             }
-        })
+        }, { operation: 'prepare_appointment_payment' })
 
+    let prepared
     try {
-        return await run()
+        prepared = await preparePayment()
     } catch (error) {
-        // Race backstop: if two requests slipped past the row lock (e.g. SQLite
-        // without FOR UPDATE), the active-payment unique index rejects the second
-        // insert. Retry once to return the winner's existing session.
+        // Race backstop: unique active-payment index rejects a second insert.
         if (error.name === 'SequelizeUniqueConstraintError') {
             logPayment('warn', 'duplicate active payment prevented by unique constraint — retrying', {
                 appointmentId,
             })
-            return run()
+            prepared = await preparePayment()
+        } else {
+            throw error
         }
+    }
+
+    if (!prepared.ok || prepared.existingPayment || !prepared.needsStripe) {
+        return prepared
+    }
+
+    // ── AFTER COMMIT: external Stripe call (cannot participate in DB rollback) ──
+    const idempotencyKey = buildIdempotencyKey(prepared.appointmentId, prepared.paymentId)
+    let session
+    try {
+        // Reload appointment outside the previous transaction for Stripe metadata.
+        const appointment = await Appointment.findByPk(prepared.appointmentId)
+        if (!appointment) {
+            return { ok: false, code: 'appointment_not_found', message: 'Appointment Cancelled or not found' }
+        }
+
+        session = await createSession(appointment, userId, {
+            idempotencyKey,
+            expiresAt: prepared.expiresAt,
+            paymentId: prepared.paymentId,
+        })
+
+        logPayment('info', 'new checkout session created with idempotency key', {
+            appointmentId: prepared.appointmentId,
+            paymentId: prepared.paymentId,
+            sessionId: session.id,
+            idempotencyKey,
+        })
+    } catch (error) {
+        await markStripeCreationFailed({
+            appointmentId: prepared.appointmentId,
+            paymentId: prepared.paymentId,
+            error,
+        })
+        return {
+            ok: false,
+            code: 'stripe_unavailable',
+            message: error?.message || 'Stripe checkout unavailable',
+            paymentStatus: APPOINTMENT_PAYMENT_STATUS.PENDING_RETRY,
+            appointmentId: prepared.appointmentId,
+            paymentId: prepared.paymentId,
+            retryable: true,
+        }
+    }
+
+    try {
+        return await saveCheckoutSession({
+            appointmentId: prepared.appointmentId,
+            paymentId: prepared.paymentId,
+            session,
+            expiresAt: prepared.expiresAt,
+        })
+    } catch (error) {
+        // Session may exist at Stripe but DB save failed — mark retryable; do not hide error.
+        logPayment('error', 'failed to persist checkout session after Stripe success', {
+            appointmentId: prepared.appointmentId,
+            paymentId: prepared.paymentId,
+            sessionId: session?.id,
+            error: error.message,
+        })
+        await markStripeCreationFailed({
+            appointmentId: prepared.appointmentId,
+            paymentId: prepared.paymentId,
+            error,
+        }).catch((markError) => {
+            logPayment('error', 'failed to mark payment failed after persist error', {
+                appointmentId: prepared.appointmentId,
+                error: markError.message,
+            })
+        })
         throw error
     }
 }

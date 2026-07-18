@@ -29,7 +29,7 @@ import {
   updateDoctorFee,
   PricingError,
 } from "../services/pricingService.js";
-import sequelize from "../config/mysql.js";
+import { withTransaction } from "../utils/databaseTransaction.js";
 
 // API for admin login — role is assigned server-side after credential check.
 const loginAdmin = async (req, res) => {
@@ -320,7 +320,7 @@ const updateDoctor = async (req, res) => {
 
         const adminActor = req.user?.email || req.user?.id || process.env.ADMIN_EMAIL || 'admin'
 
-        await sequelize.transaction(async (transaction) => {
+        await withTransaction(async (transaction) => {
             if (fees !== undefined && fees !== null && fees !== '') {
                 await updateDoctorFee({
                     doctorId: docId,
@@ -335,7 +335,7 @@ const updateDoctor = async (req, res) => {
             if (Object.keys(updateData).length > 0) {
                 await Doctor.update(updateData, { where: { id: docId }, transaction })
             }
-        })
+        }, { operation: 'admin_update_doctor' })
 
         res.json({ success: true, message: 'Doctor Updated' })
     } catch (error) {

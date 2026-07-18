@@ -8,7 +8,8 @@
   "main": "server.js",
   "scripts": {
     "test": "NODE_OPTIONS=--experimental-vm-modules jest tests/unit.test.js --runInBand",
-    "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest tests/integration.test.js tests/stripeWebhook.test.js tests/paymentIdempotency.test.js tests/schedulingProtection.test.js tests/appointmentStateTransitions.test.js tests/appointmentLifecycleMigration.test.js tests/cancellationRefund.test.js tests/jwtSecurity.test.js tests/pricingIntegrity.test.js --runInBand",
+    "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest tests/integration.test.js tests/stripeWebhook.test.js tests/paymentIdempotency.test.js tests/schedulingProtection.test.js tests/appointmentStateTransitions.test.js tests/appointmentLifecycleMigration.test.js tests/cancellationRefund.test.js tests/jwtSecurity.test.js tests/pricingIntegrity.test.js tests/transactionLifecycle.test.js --runInBand",
+    "test:tx": "NODE_OPTIONS=--experimental-vm-modules jest tests/transactionLifecycle.test.js --runInBand",
     "test:pricing": "NODE_OPTIONS=--experimental-vm-modules jest tests/pricingIntegrity.test.js --runInBand",
     "test:jwt": "NODE_OPTIONS=--experimental-vm-modules jest tests/jwtSecurity.test.js --runInBand",
     "validate:fees": "node scripts/validateDoctorFees.js",

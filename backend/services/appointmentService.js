@@ -1,10 +1,10 @@
 import { Op, UniqueConstraintError } from 'sequelize'
-import sequelize from '../config/mysql.js'
 import Appointment from '../models/appointmentModel.js'
 import Doctor from '../models/doctorModel.js'
 import User from '../models/userModel.js'
 import { lockDoctorForUpdate } from '../utils/lockDoctor.js'
 import { toSafeDoctorSnapshot } from '../utils/appointmentSlots.js'
+import { withTransaction } from '../utils/databaseTransaction.js'
 import {
   isFutureSlot,
   isWithinWorkingHours,
@@ -77,15 +77,6 @@ const isUniqueViolation = (error) =>
   error?.name === 'SequelizeUniqueConstraintError' ||
   /unique constraint|UNIQUE constraint failed|Duplicate entry/i.test(error?.message || '') ||
   /unique constraint|UNIQUE constraint failed|Duplicate entry/i.test(error?.parent?.message || '')
-
-const safeRollback = async (transaction) => {
-  if (!transaction || transaction.finished) return
-  try {
-    await transaction.rollback()
-  } catch {
-    // Connection may already be cleaned up (e.g. nested SQLite failures).
-  }
-}
 
 const lockAppointmentRow = async (appointmentId, transaction) => {
   const dialect = Appointment.sequelize.getDialect()
@@ -242,78 +233,77 @@ export const createAppointment = async ({
   })
 
   return withDoctorQueue(doctorId, async () => {
-    let transaction
     try {
-      transaction = await sequelize.transaction()
-      const doctor = await lockDoctorForUpdate(doctorId, transaction)
-      await validateSlot({ doctorId, startTime, doctor, transaction })
+      // DB-only transaction: validate + create. External side effects (Stripe, email)
+      // must run after this managed transaction commits.
+      const appointment = await withTransaction(async (transaction) => {
+        const doctor = await lockDoctorForUpdate(doctorId, transaction)
+        await validateSlot({ doctorId, startTime, doctor, transaction })
 
-      const userData = await User.findByPk(userId, {
-        attributes: { exclude: ['password', 'resetToken', 'resetTokenExpiry'] },
-        transaction,
-      })
-      if (!userData) {
-        throw new SchedulingError('User not found', { statusCode: 404, code: 'user_not_found' })
-      }
+        const userData = await User.findByPk(userId, {
+          attributes: { exclude: ['password', 'resetToken', 'resetTokenExpiry'] },
+          transaction,
+        })
+        if (!userData) {
+          throw new SchedulingError('User not found', { statusCode: 404, code: 'user_not_found' })
+        }
 
-      const legacy = toLegacySlotFields(startTime)
-      const paymentStatus = payMode === 'now' ? 'pending' : 'unpaid'
-      const status =
-        payMode === 'now' ? APPOINTMENT_STATUS.PENDING_PAYMENT : APPOINTMENT_STATUS.CONFIRMED
-      const now = new Date()
+        const legacy = toLegacySlotFields(startTime)
+        const paymentStatus = payMode === 'now' ? 'pending' : 'unpaid'
+        const status =
+          payMode === 'now' ? APPOINTMENT_STATUS.PENDING_PAYMENT : APPOINTMENT_STATUS.CONFIRMED
+        const now = new Date()
 
-      // Snapshot fee at booking time — never trust client amount / never re-read later.
-      const { amount: appointmentAmount, currency } = calculateAppointmentAmount(doctor)
+        // Snapshot fee at booking time — never trust client amount / never re-read later.
+        const { amount: appointmentAmount, currency } = calculateAppointmentAmount(doctor)
 
-      const appointment = await Appointment.create(
-        {
-          userId,
-          docId: doctorId,
-          userData: userData.toJSON(),
-          docData: toSafeDoctorSnapshot(doctor),
-          amount: appointmentAmount,
-          currency,
-          startTime,
-          heldStartTime: startTime,
-          slotDate: legacy.slotDate,
-          slotTime: legacy.slotTime,
-          date: Date.now(),
-          payment: false,
-          paymentStatus,
-          status,
-          statusChangedAt: now,
-          cancelled: false,
-          isCompleted: false,
-        },
-        { transaction }
-      )
+        const created = await Appointment.create(
+          {
+            userId,
+            docId: doctorId,
+            userData: userData.toJSON(),
+            docData: toSafeDoctorSnapshot(doctor),
+            amount: appointmentAmount,
+            currency,
+            startTime,
+            heldStartTime: startTime,
+            slotDate: legacy.slotDate,
+            slotTime: legacy.slotTime,
+            date: Date.now(),
+            payment: false,
+            paymentStatus,
+            status,
+            statusChangedAt: now,
+            cancelled: false,
+            isCompleted: false,
+          },
+          { transaction }
+        )
 
-      await recordInitialStatus(appointment, {
-        actorType: ACTOR_TYPE.USER,
-        actorId: userId,
-        reason: payMode === 'now' ? 'Booked with pay-now hold' : 'Booked with pay-later confirmation',
-        metadata: { payMode },
-        transaction,
-      })
+        await recordInitialStatus(created, {
+          actorType: ACTOR_TYPE.USER,
+          actorId: userId,
+          reason: payMode === 'now' ? 'Booked with pay-now hold' : 'Booked with pay-later confirmation',
+          metadata: { payMode },
+          transaction,
+        })
 
-      // Denormalized cache for legacy UI only — appointments remain source of truth.
-      const slots_booked = syncSlotsBookedCache(doctor.slots_booked, { add: legacy })
-      await Doctor.update({ slots_booked }, { where: { id: doctorId }, transaction })
+        // Denormalized cache for legacy UI only — appointments remain source of truth.
+        const slots_booked = syncSlotsBookedCache(doctor.slots_booked, { add: legacy })
+        await Doctor.update({ slots_booked }, { where: { id: doctorId }, transaction })
 
-      await transaction.commit()
-      transaction = null
+        return created
+      }, { operation: 'create_appointment' })
 
       logScheduling('info', 'booking_created', {
         doctorId,
         appointmentId: appointment.id,
         startTime: startTime.toISOString(),
-        status,
+        status: appointment.status,
       })
 
       return appointment
     } catch (error) {
-      await safeRollback(transaction)
-
       if (isUniqueViolation(error)) {
         logScheduling('warn', 'unique_constraint_failure', {
           doctorId,
@@ -375,54 +365,53 @@ export const rescheduleAppointment = async ({
   }
 
   return withDoctorQueue(existing.docId, async () => {
-    let transaction
     try {
-      transaction = await sequelize.transaction()
-      const appointment = await lockAppointmentRow(appointmentId, transaction)
-      if (!appointment) {
-        throw new SchedulingError('Appointment not found', { statusCode: 404, code: 'not_found' })
-      }
-      if (appointment.userId !== userId) {
-        throw new SchedulingError('Unauthorized action', { statusCode: 403, code: 'unauthorized' })
-      }
-      if (!isReschedulableStatus(appointment.status)) {
-        throw new SchedulingError('Cannot reschedule this appointment', {
-          statusCode: 400,
-          code: 'not_reschedulable',
-        })
-      }
+      const appointment = await withTransaction(async (transaction) => {
+        const locked = await lockAppointmentRow(appointmentId, transaction)
+        if (!locked) {
+          throw new SchedulingError('Appointment not found', { statusCode: 404, code: 'not_found' })
+        }
+        if (locked.userId !== userId) {
+          throw new SchedulingError('Unauthorized action', { statusCode: 403, code: 'unauthorized' })
+        }
+        if (!isReschedulableStatus(locked.status)) {
+          throw new SchedulingError('Cannot reschedule this appointment', {
+            statusCode: 400,
+            code: 'not_reschedulable',
+          })
+        }
 
-      const doctor = await lockDoctorForUpdate(appointment.docId, transaction)
-      await validateSlot({
-        doctorId: appointment.docId,
-        startTime,
-        excludeAppointmentId: appointment.id,
-        doctor,
-        transaction,
-      })
-
-      const oldLegacy =
-        appointment.startTime
-          ? toLegacySlotFields(new Date(appointment.startTime))
-          : { slotDate: appointment.slotDate, slotTime: appointment.slotTime }
-      const newLegacy = toLegacySlotFields(startTime)
-
-      await appointment.update(
-        {
+        const doctor = await lockDoctorForUpdate(locked.docId, transaction)
+        await validateSlot({
+          doctorId: locked.docId,
           startTime,
-          heldStartTime: startTime,
-          slotDate: newLegacy.slotDate,
-          slotTime: newLegacy.slotTime,
-        },
-        { transaction }
-      )
+          excludeAppointmentId: locked.id,
+          doctor,
+          transaction,
+        })
 
-      let slots_booked = syncSlotsBookedCache(doctor.slots_booked, { remove: oldLegacy })
-      slots_booked = syncSlotsBookedCache(slots_booked, { add: newLegacy })
-      await Doctor.update({ slots_booked }, { where: { id: appointment.docId }, transaction })
+        const oldLegacy =
+          locked.startTime
+            ? toLegacySlotFields(new Date(locked.startTime))
+            : { slotDate: locked.slotDate, slotTime: locked.slotTime }
+        const newLegacy = toLegacySlotFields(startTime)
 
-      await transaction.commit()
-      transaction = null
+        await locked.update(
+          {
+            startTime,
+            heldStartTime: startTime,
+            slotDate: newLegacy.slotDate,
+            slotTime: newLegacy.slotTime,
+          },
+          { transaction }
+        )
+
+        let slots_booked = syncSlotsBookedCache(doctor.slots_booked, { remove: oldLegacy })
+        slots_booked = syncSlotsBookedCache(slots_booked, { add: newLegacy })
+        await Doctor.update({ slots_booked }, { where: { id: locked.docId }, transaction })
+
+        return locked
+      }, { operation: 'reschedule_appointment' })
 
       logScheduling('info', 'reschedule_completed', {
         appointmentId,
@@ -432,8 +421,6 @@ export const rescheduleAppointment = async ({
 
       return appointment
     } catch (error) {
-      await safeRollback(transaction)
-
       if (isUniqueViolation(error)) {
         logScheduling('warn', 'unique_constraint_failure', {
           appointmentId,

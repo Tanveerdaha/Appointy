@@ -5,6 +5,7 @@ import User from "../models/userModel.js";
 import Appointment from "../models/appointmentModel.js";
 import { uploadImage } from '../utils/uploadImage.js';
 import { notifyAppointmentBooked, notifyAppointmentCancelled, notifyPasswordReset } from '../services/notificationService.js';
+import { enqueueNotification } from '../services/notificationQueue.js'
 import {
     reconcileCheckoutSession,
 } from '../services/stripePaymentService.js'
@@ -194,8 +195,13 @@ const bookAppointment = async (req, res) => {
             payMode,
         })
 
+        // AFTER COMMIT: queue notification — booking must not fail if email fails.
         const user = await User.findByPk(userId)
-        notifyAppointmentBooked(appointment, user?.email).catch(console.error)
+        enqueueNotification({
+            type: 'appointment_booked',
+            meta: { appointmentId: appointment.id },
+            handler: () => notifyAppointmentBooked(appointment, user?.email),
+        })
 
         const response = {
             success: true,
@@ -205,6 +211,7 @@ const bookAppointment = async (req, res) => {
         }
 
         if (payMode === 'now') {
+            // AFTER COMMIT: Stripe checkout. Failure keeps the appointment and marks pending_retry.
             try {
                 const result = await createAppointmentPayment({ appointmentId: appointment.id, userId })
                 if (result.ok) {
@@ -214,10 +221,17 @@ const bookAppointment = async (req, res) => {
                     response.sessionId = result.sessionId
                     response.existingPayment = result.existingPayment
                 } else {
+                    await appointment.reload()
+                    response.appointment = syncPaymentFields(appointment)
                     response.paymentWarning = result.message
+                    response.paymentRetryable = result.retryable === true
+                    response.paymentStatus = result.paymentStatus || appointment.paymentStatus
                 }
             } catch (err) {
+                await appointment.reload().catch(() => {})
+                response.appointment = syncPaymentFields(appointment)
                 response.paymentWarning = err.message
+                response.paymentRetryable = true
             }
         }
 
@@ -244,7 +258,11 @@ const cancelAppointment = async (req, res) => {
         })
 
         const user = await User.findByPk(userId)
-        notifyAppointmentCancelled(result.appointment, user?.email).catch(console.error)
+        enqueueNotification({
+            type: 'appointment_cancelled',
+            meta: { appointmentId: result.appointment?.id },
+            handler: () => notifyAppointmentCancelled(result.appointment, user?.email),
+        })
 
         res.json({
             success: true,
@@ -291,6 +309,7 @@ const PAYMENT_ERROR_STATUS = {
     appointment_not_found: 404,
     unauthorized: 403,
     already_paid: 400,
+    stripe_unavailable: 502,
 }
 
 const paymentStripe = async (req, res) => {

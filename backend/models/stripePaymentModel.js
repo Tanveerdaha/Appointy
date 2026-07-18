@@ -21,6 +21,10 @@ export const PAYMENT_STATUS = {
 export const APPOINTMENT_PAYMENT_STATUS = {
   UNPAID: 'unpaid',
   PENDING: 'pending',
+  /** Checkout/session creation failed after appointment was committed — retry allowed. */
+  PENDING_RETRY: 'pending_retry',
+  /** Terminal failure of an unpaid checkout attempt (appointment still exists). */
+  PAYMENT_FAILED: 'payment_failed',
   PAID: 'paid',
   REFUND_PENDING: 'refund_pending',
   REFUNDED: 'refunded',

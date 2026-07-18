@@ -77,9 +77,10 @@ const defaultReason = (actorType) => {
 }
 
 /**
- * Retire any in-flight unpaid Checkout attempts for this appointment.
+ * Retire any in-flight unpaid Checkout attempts for this appointment (DB only).
+ * Returns Stripe session IDs that should be expired AFTER the surrounding transaction commits.
  */
-const retireActivePayments = async (appointment, { transaction, expireCheckout = true } = {}) => {
+const retireActivePayments = async (appointment, { transaction } = {}) => {
   const active = await StripePayment.findAll({
     where: {
       appointmentId: appointment.id,
@@ -89,20 +90,11 @@ const retireActivePayments = async (appointment, { transaction, expireCheckout =
     lock: transaction.LOCK.UPDATE,
   })
 
+  const sessionIdsToExpire = []
   for (const payment of active) {
-    if (expireCheckout && payment.stripeCheckoutSessionId) {
-      try {
-        const stripe = getStripe()
-        await stripe.checkout.sessions.expire(payment.stripeCheckoutSessionId)
-      } catch (error) {
-        logCancellation('warn', 'Failed to expire Stripe checkout session', {
-          appointmentId: appointment.id,
-          sessionId: payment.stripeCheckoutSessionId,
-          error: error.message,
-        })
-      }
+    if (payment.stripeCheckoutSessionId) {
+      sessionIdsToExpire.push(payment.stripeCheckoutSessionId)
     }
-
     await payment.update(
       {
         status: PAYMENT_STATUS.EXPIRED,
@@ -112,7 +104,23 @@ const retireActivePayments = async (appointment, { transaction, expireCheckout =
     )
   }
 
-  return active.length
+  return sessionIdsToExpire
+}
+
+const expireCheckoutSessions = async (sessionIds, { appointmentId } = {}) => {
+  if (!sessionIds?.length) return
+  const stripe = getStripe()
+  for (const sessionId of sessionIds) {
+    try {
+      await stripe.checkout.sessions.expire(sessionId)
+    } catch (error) {
+      logCancellation('warn', 'Failed to expire Stripe checkout session', {
+        appointmentId,
+        sessionId,
+        error: error.message,
+      })
+    }
+  }
 }
 
 /**
@@ -264,9 +272,11 @@ export const requestCancellation = async ({
     if (
       paymentStatus === APPOINTMENT_PAYMENT_STATUS.UNPAID ||
       paymentStatus === APPOINTMENT_PAYMENT_STATUS.PENDING ||
+      paymentStatus === APPOINTMENT_PAYMENT_STATUS.PENDING_RETRY ||
+      paymentStatus === APPOINTMENT_PAYMENT_STATUS.PAYMENT_FAILED ||
       paymentStatus === APPOINTMENT_PAYMENT_STATUS.REFUNDED
     ) {
-      await retireActivePayments(appointment, { transaction, expireCheckout })
+      const sessionIdsToExpire = await retireActivePayments(appointment, { transaction })
 
       const cancelled = await cancelWithPaymentMirror(appointment.id, {
         actorType,
@@ -297,6 +307,7 @@ export const requestCancellation = async ({
         refundRequired: false,
         refund: null,
         message: 'Appointment Cancelled',
+        sessionIdsToExpire: expireCheckout ? sessionIdsToExpire : [],
       }
     }
 
@@ -486,6 +497,12 @@ export const requestCancellation = async ({
         appointmentId: phase1.appointment.id,
         paymentStatus: phase1.appointment.paymentStatus,
         refundRequired: false,
+      })
+    }
+    // AFTER COMMIT: expire Stripe checkout sessions (external — not part of DB tx).
+    if (phase1.sessionIdsToExpire?.length) {
+      await expireCheckoutSessions(phase1.sessionIdsToExpire, {
+        appointmentId: phase1.appointment.id,
       })
     }
     return phase1

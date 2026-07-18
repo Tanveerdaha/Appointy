@@ -1,4 +1,3 @@
-import sequelize from '../config/mysql.js'
 import Appointment, {
   APPOINTMENT_STATUS,
   SLOT_HOLDING_STATUSES,
@@ -10,6 +9,7 @@ import AppointmentHistory, {
 } from '../models/appointmentHistoryModel.js'
 import { lockDoctorForUpdate } from '../utils/lockDoctor.js'
 import { toLegacySlotFields } from '../utils/slotTime.js'
+import { withTransaction } from '../utils/databaseTransaction.js'
 
 export { APPOINTMENT_STATUS, SLOT_HOLDING_STATUSES, APPOINTMENT_STATUS_VALUES }
 export { ACTOR_TYPE, HISTORY_OUTCOME }
@@ -227,7 +227,7 @@ export const transitionAppointment = async (
     })
   }
 
-  const run = async (transaction, ownsTransaction) => {
+  const run = async (transaction) => {
     const appointmentId =
       typeof appointmentOrId === 'string' ? appointmentOrId : appointmentOrId?.id
     if (!appointmentId) {
@@ -267,43 +267,18 @@ export const transitionAppointment = async (
             ? 'cannot_complete_cancelled'
             : 'invalid_transition'
 
-      if (recordRejectedAttempt) {
-        // Persist the rejected attempt in its own committed unit when we own the tx,
-        // or inside the caller tx when provided (caller decides commit/rollback).
-        // For owned transactions we commit the rejection history then throw.
-        await writeHistory({
-          appointmentId: appointment.id,
-          oldStatus: currentStatus,
-          newStatus: currentStatus,
-          outcome: HISTORY_OUTCOME.REJECTED,
-          actorType,
-          actorId,
-          reason: reason || message,
-          errorCode: code,
-          metadata: {
-            ...(metadata || {}),
-            requestedStatus: newStatus,
-          },
-          occurredAt: now,
-          transaction,
-        })
-
-        if (ownsTransaction) {
-          await transaction.commit()
-        }
-      }
-
-      logLifecycle('info', 'Appointment transition failed', {
+      // Signal rejection to the caller; history is written in a separate committed
+      // unit when we own the transaction (see below) so managed rollback cannot erase it.
+      const rejection = new LifecycleError(message, { statusCode: 400, code })
+      rejection._rejectionContext = {
         appointmentId: appointment.id,
-        oldStatus: currentStatus,
+        currentStatus,
         newStatus,
-        actor: actorType,
-        success: false,
-        reason: message,
+        message,
         code,
-      })
-
-      throw new LifecycleError(message, { statusCode: 400, code })
+        now,
+      }
+      throw rejection
     }
 
     const wasHolding = holdsSlot(currentStatus)
@@ -332,10 +307,6 @@ export const transitionAppointment = async (
       transaction,
     })
 
-    if (ownsTransaction) {
-      await transaction.commit()
-    }
-
     logLifecycle('info', 'Appointment transition succeeded', {
       appointmentId: appointment.id,
       oldStatus: currentStatus,
@@ -345,24 +316,94 @@ export const transitionAppointment = async (
       reason,
     })
 
-    await appointment.reload({ transaction: ownsTransaction ? undefined : transaction })
+    await appointment.reload({ transaction })
     return appointment
   }
 
-  if (outerTx) {
-    return run(outerTx, false)
+  const persistRejectedAttempt = async (rejection) => {
+    if (!recordRejectedAttempt || !rejection?._rejectionContext) return
+    const ctx = rejection._rejectionContext
+    try {
+      await withTransaction(async (transaction) => {
+        await writeHistory({
+          appointmentId: ctx.appointmentId,
+          oldStatus: ctx.currentStatus,
+          newStatus: ctx.currentStatus,
+          outcome: HISTORY_OUTCOME.REJECTED,
+          actorType,
+          actorId,
+          reason: reason || ctx.message,
+          errorCode: ctx.code,
+          metadata: {
+            ...(metadata || {}),
+            requestedStatus: ctx.newStatus,
+          },
+          occurredAt: ctx.now,
+          transaction,
+        })
+      }, { operation: 'record_rejected_transition' })
+    } catch (historyError) {
+      logLifecycle('error', 'Failed to persist rejected transition history', {
+        appointmentId: ctx.appointmentId,
+        error: historyError.message,
+      })
+    }
+
+    logLifecycle('info', 'Appointment transition failed', {
+      appointmentId: ctx.appointmentId,
+      oldStatus: ctx.currentStatus,
+      newStatus: ctx.newStatus,
+      actor: actorType,
+      success: false,
+      reason: ctx.message,
+      code: ctx.code,
+    })
   }
 
-  const transaction = await sequelize.transaction()
-  try {
-    return await run(transaction, true)
-  } catch (error) {
-    if (!transaction.finished) {
-      try {
-        await transaction.rollback()
-      } catch {
-        // already finished (e.g. rejected attempt committed)
+  if (outerTx) {
+    try {
+      return await run(outerTx)
+    } catch (error) {
+      if (error instanceof LifecycleError && error._rejectionContext && recordRejectedAttempt) {
+        // Caller owns the transaction — write rejection history inside it.
+        const ctx = error._rejectionContext
+        await writeHistory({
+          appointmentId: ctx.appointmentId,
+          oldStatus: ctx.currentStatus,
+          newStatus: ctx.currentStatus,
+          outcome: HISTORY_OUTCOME.REJECTED,
+          actorType,
+          actorId,
+          reason: reason || ctx.message,
+          errorCode: ctx.code,
+          metadata: {
+            ...(metadata || {}),
+            requestedStatus: ctx.newStatus,
+          },
+          occurredAt: ctx.now,
+          transaction: outerTx,
+        })
+        logLifecycle('info', 'Appointment transition failed', {
+          appointmentId: ctx.appointmentId,
+          oldStatus: ctx.currentStatus,
+          newStatus: ctx.newStatus,
+          actor: actorType,
+          success: false,
+          reason: ctx.message,
+          code: ctx.code,
+        })
       }
+      throw error
+    }
+  }
+
+  try {
+    return await withTransaction((transaction) => run(transaction), {
+      operation: 'transition_appointment',
+    })
+  } catch (error) {
+    if (error instanceof LifecycleError && error._rejectionContext) {
+      await persistRejectedAttempt(error)
     }
     throw error
   }

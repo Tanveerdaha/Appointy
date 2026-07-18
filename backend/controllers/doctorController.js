@@ -23,7 +23,7 @@ import {
   updateDoctorFee,
   PricingError,
 } from "../services/pricingService.js";
-import sequelize from "../config/mysql.js";
+import { withTransaction } from "../utils/databaseTransaction.js";
 
 // Doctor login — role is assigned server-side from the doctor table, never from the client.
 const loginDoctor = async (req, res) => {
@@ -234,7 +234,7 @@ const updateDoctorProfile = async (req, res) => {
     if (available !== undefined) updateData.available = available;
     if (about !== undefined) updateData.about = about;
 
-    await sequelize.transaction(async (transaction) => {
+    await withTransaction(async (transaction) => {
       if (fees !== undefined) {
         await updateDoctorFee({
           doctorId: docId,
@@ -249,7 +249,7 @@ const updateDoctorProfile = async (req, res) => {
       if (Object.keys(updateData).length > 0) {
         await Doctor.update(updateData, { where: { id: docId }, transaction });
       }
-    });
+    }, { operation: 'doctor_update_profile' });
 
     res.json({ success: true, message: "Profile Updated" });
   } catch (error) {
