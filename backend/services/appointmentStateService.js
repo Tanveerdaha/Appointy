@@ -95,6 +95,11 @@ export const compatibilityFieldsForStatus = (status, appointment, { now = new Da
     fields.heldStartTime = appointment.heldStartTime || appointment.startTime
   }
 
+  // Payment holds only apply while PENDING_PAYMENT — clear on confirm/cancel/etc.
+  if (status !== APPOINTMENT_STATUS.PENDING_PAYMENT) {
+    fields.holdExpiresAt = null
+  }
+
   return fields
 }
 

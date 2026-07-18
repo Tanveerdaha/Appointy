@@ -19,6 +19,9 @@ import {
   findPaidPayment,
   verifyRefundEligibility,
   writeRefundAudit,
+  buildRefundFailedFields,
+  isRefundRetryExhausted,
+  alertRefundFailure,
 } from './refundService.js'
 import { getStripe } from './stripePaymentService.js'
 
@@ -556,6 +559,7 @@ export const requestCancellation = async ({
       createRefundFn,
     })
   } catch (error) {
+    let exhausted = false
     await withTransaction(async (transaction) => {
       // Lock order: appointment → payment.
       const appointment = await Appointment.findByPk(phase1.appointmentId, {
@@ -567,15 +571,12 @@ export const requestCancellation = async ({
         lock: transaction.LOCK.UPDATE,
       })
 
-      await payment.update(
-        {
-          status: PAYMENT_STATUS.REFUND_FAILED,
-          refundStatus: 'failed',
-          refundReason: cancelReason || error.message,
-          activeAppointmentId: null,
-        },
-        { transaction }
-      )
+      const fields = buildRefundFailedFields(payment, {
+        errorMessage: error.message,
+        reason: cancelReason || error.message,
+      })
+      exhausted = isRefundRetryExhausted(payment)
+      await payment.update(fields, { transaction })
       await appointment.update(
         {
           paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUND_FAILED,
@@ -591,10 +592,39 @@ export const requestCancellation = async ({
         reason: cancelReason || error.message,
         performedBy: actorType,
         performedById: actorId,
-        metadata: { error: error.message, retryable: true },
+        metadata: { error: error.message, retryable: !exhausted },
         transaction,
       })
+      if (exhausted) {
+        await writeRefundAudit({
+          appointmentId: appointment.id,
+          paymentTransactionId: payment.id,
+          action: REFUND_AUDIT_ACTION.REFUND_RETRY_EXHAUSTED,
+          amount: phase1.refundAmount,
+          reason: fields.refundLastError,
+          performedBy: actorType,
+          performedById: actorId,
+          metadata: { refundRetryCount: payment.refundRetryCount },
+          transaction,
+        })
+      }
     }, { operation: 'record_refund_failure' })
+
+    if (exhausted) {
+      await alertRefundFailure({
+        appointmentId: phase1.appointmentId,
+        paymentId: phase1.payment.id,
+        errorMessage: error.message,
+        exhausted: true,
+      })
+    } else {
+      await alertRefundFailure({
+        appointmentId: phase1.appointmentId,
+        paymentId: phase1.payment.id,
+        errorMessage: error.message,
+        exhausted: false,
+      })
+    }
 
     logCancellation('error', 'Refund failed after cancellation committed', {
       appointmentId: phase1.appointmentId,
@@ -648,6 +678,14 @@ export const requestCancellation = async ({
         stripeChargeId: chargeId || payment.stripeChargeId,
         refundedAt: paymentStatus === PAYMENT_STATUS.REFUNDED ? new Date() : payment.refundedAt,
         activeAppointmentId: null,
+        ...(paymentStatus === PAYMENT_STATUS.REFUND_FAILED
+          ? buildRefundFailedFields(payment, {
+              errorMessage: `Stripe refund ${stripeStatus}`,
+              reason: cancelReason,
+            })
+          : paymentStatus === PAYMENT_STATUS.REFUNDED
+            ? { refundNextRetryAt: null, refundLastError: null }
+            : {}),
       },
       { transaction }
     )

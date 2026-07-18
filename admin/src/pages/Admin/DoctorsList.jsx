@@ -52,7 +52,7 @@ const DoctorsList = () => {
   }
 
   const handleDelete = async (doctor) => {
-    if (!window.confirm(`Delete Dr. ${doctor.name}? This cannot be undone.`)) return
+    if (!window.confirm(`Remove Dr. ${doctor.name}? They will be hidden from listings. Appointment history is preserved.`)) return
     await deleteDoctor(getId(doctor))
   }
 

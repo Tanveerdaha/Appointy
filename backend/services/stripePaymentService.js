@@ -6,6 +6,7 @@ import StripeWebhookEvent from '../models/stripeWebhookEventModel.js'
 import StripePayment, {
     PAYMENT_STATUS,
     ACTIVE_PAYMENT_STATUSES,
+    APPOINTMENT_PAYMENT_STATUS,
 } from '../models/stripePaymentModel.js'
 import {
     APPOINTMENT_STATUS,
@@ -18,6 +19,8 @@ import {
     validateStripeAmount,
 } from './pricingService.js'
 
+const LATE_PAYMENT_REFUND_REASON = 'Payment received after appointment cancellation'
+
 const logStripe = (level, message, meta = {}) => {
     const payload = { service: 'stripePayment', ...meta }
     if (level === 'error') {
@@ -26,6 +29,129 @@ const logStripe = (level, message, meta = {}) => {
         console.warn(`[stripe] ${message}`, payload)
     } else {
         console.log(`[stripe] ${message}`, payload)
+    }
+}
+
+const mapLedgerToRefundOutcome = (ledgerStatus) => {
+    if (ledgerStatus === PAYMENT_STATUS.REFUNDED) return 'refunded'
+    if (ledgerStatus === PAYMENT_STATUS.REFUND_PENDING) return 'refund_pending'
+    if (ledgerStatus === PAYMENT_STATUS.REFUND_FAILED) return 'refund_failed'
+    return null
+}
+
+/**
+ * After cancelled_paid (or duplicate recovery): claim/resume an idempotent refund.
+ * Never throws for concurrent refund_pending / already_refunded / Stripe failures
+ * that were durably recorded as REFUND_FAILED — callers must still return 200.
+ */
+const refundLatePaymentIfNeeded = async ({
+    appointmentId,
+    amountCents = null,
+    createRefundFn = null,
+}) => {
+    const {
+        findPaidPayment,
+        refundAppointmentPayment,
+        resumeRefundAfterClaim,
+        RefundError,
+    } = await import('./refundService.js')
+
+    const payment = await findPaidPayment(appointmentId)
+    if (!payment) {
+        return { refundOutcome: 'skipped', reason: 'no_payment' }
+    }
+
+    if (payment.status === PAYMENT_STATUS.REFUNDED) {
+        return {
+            refundOutcome: 'already_refunded',
+            paymentId: payment.id,
+            paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUNDED,
+        }
+    }
+
+    const resolvedAmount =
+        Number.isFinite(amountCents) && amountCents > 0
+            ? Math.round(amountCents)
+            : payment.refundAmount || payment.amount
+
+    try {
+        if (payment.status === PAYMENT_STATUS.REFUND_PENDING) {
+            const result = await resumeRefundAfterClaim({
+                appointmentId,
+                amountCents: resolvedAmount,
+                reason: payment.refundReason || LATE_PAYMENT_REFUND_REASON,
+                actorType: ACTOR_TYPE.SYSTEM,
+                createRefundFn,
+                payment,
+            })
+            const ledgerStatus = result.payment?.status || PAYMENT_STATUS.REFUND_PENDING
+            return {
+                refundOutcome: mapLedgerToRefundOutcome(ledgerStatus) || 'refund_pending',
+                paymentId: payment.id,
+                paymentStatus:
+                    ledgerStatus === PAYMENT_STATUS.REFUNDED
+                        ? APPOINTMENT_PAYMENT_STATUS.REFUNDED
+                        : APPOINTMENT_PAYMENT_STATUS.REFUND_PENDING,
+            }
+        }
+
+        if (
+            payment.status !== PAYMENT_STATUS.PAID &&
+            payment.status !== PAYMENT_STATUS.REFUND_FAILED
+        ) {
+            return {
+                refundOutcome: 'skipped',
+                reason: 'not_refundable',
+                paymentId: payment.id,
+            }
+        }
+
+        const result = await refundAppointmentPayment({
+            appointmentId,
+            amountCents: resolvedAmount,
+            reason: LATE_PAYMENT_REFUND_REASON,
+            actorType: ACTOR_TYPE.SYSTEM,
+            createRefundFn,
+        })
+        const ledgerStatus = result.payment?.status || PAYMENT_STATUS.REFUND_PENDING
+        return {
+            refundOutcome: mapLedgerToRefundOutcome(ledgerStatus) || 'refund_pending',
+            paymentId: payment.id,
+            paymentStatus:
+                ledgerStatus === PAYMENT_STATUS.REFUNDED
+                    ? APPOINTMENT_PAYMENT_STATUS.REFUNDED
+                    : APPOINTMENT_PAYMENT_STATUS.REFUND_PENDING,
+        }
+    } catch (error) {
+        if (error instanceof RefundError) {
+            if (error.code === 'refund_pending') {
+                return {
+                    refundOutcome: 'refund_pending',
+                    paymentId: payment.id,
+                    paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUND_PENDING,
+                }
+            }
+            if (error.code === 'already_refunded') {
+                return {
+                    refundOutcome: 'already_refunded',
+                    paymentId: payment.id,
+                    paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUNDED,
+                }
+            }
+            if (error.code === 'stripe_refund_failed') {
+                logStripe('error', 'late-payment refund failed after claim — recorded as REFUND_FAILED', {
+                    appointmentId,
+                    paymentId: payment.id,
+                    error: error.message,
+                })
+                return {
+                    refundOutcome: 'refund_failed',
+                    paymentId: payment.id,
+                    paymentStatus: APPOINTMENT_PAYMENT_STATUS.REFUND_FAILED,
+                }
+            }
+        }
+        throw error
     }
 }
 
@@ -331,23 +457,32 @@ const recordStripePaymentPaid = async ({ appointmentId, session, transaction, st
 /**
  * Authoritative payment reconciliation from a verified Stripe Checkout Session.
  * Used by webhooks (primary) and verify-stripe (UX helper).
+ *
+ * For CANCELLED / NO_SHOW appointments that receive a paid session: records the
+ * payment, then after commit initiates an idempotent automatic refund.
  */
 export const markAppointmentPaidFromCheckoutSession = async ({
     session,
     stripeEventId = null,
     eventType = null,
     expectedUserId = null,
+    createRefundFn = null,
 }) => {
-    // DB-only reconciliation; Stripe network I/O happens before this call.
-    return withTransaction(async (transaction) => {
+    // DB-only reconciliation; Stripe refund I/O happens after this transaction commits.
+    const result = await withTransaction(async (transaction) => {
         const claim = await claimWebhookEvent(stripeEventId, eventType, transaction)
         if (claim.duplicate) {
-            logStripe('info', 'duplicate webhook event — no-op', {
+            logStripe('info', 'duplicate webhook event — inspecting for late-payment refund recovery', {
                 stripeEventId,
                 eventType,
                 sessionId: session?.id,
             })
-            return { status: 'duplicate', message: 'Event already processed' }
+            return {
+                status: 'duplicate',
+                message: 'Event already processed',
+                appointmentId: session?.metadata?.appointmentId || null,
+                inspectForLateRefund: true,
+            }
         }
 
         const appointmentId = session?.metadata?.appointmentId
@@ -383,7 +518,7 @@ export const markAppointmentPaidFromCheckoutSession = async ({
             appointment.status === APPOINTMENT_STATUS.CANCELLED ||
             appointment.status === APPOINTMENT_STATUS.NO_SHOW
         ) {
-            logStripe('error', 'cancelled appointment received paid Stripe session — refund/reconciliation required', {
+            logStripe('error', 'cancelled appointment received paid Stripe session — initiating automatic refund', {
                 appointmentId: appointment.id,
                 sessionId: session.id,
                 stripeEventId,
@@ -399,7 +534,7 @@ export const markAppointmentPaidFromCheckoutSession = async ({
                 },
                 { transaction }
             )
-            await recordStripePaymentPaid({
+            const payment = await recordStripePaymentPaid({
                 appointmentId: appointment.id,
                 session,
                 transaction,
@@ -407,8 +542,11 @@ export const markAppointmentPaidFromCheckoutSession = async ({
             })
             return {
                 status: 'cancelled_paid',
-                message: 'Payment received for cancelled appointment; requires refund handling',
+                message: 'Payment received for cancelled appointment; refund initiated',
                 appointmentId: appointment.id,
+                paymentId: payment.id,
+                amountCents: payment.amount ?? session.amount_total,
+                needsLateRefund: true,
             }
         }
 
@@ -491,13 +629,61 @@ export const markAppointmentPaidFromCheckoutSession = async ({
             payment: true,
         }
     }, { operation: 'mark_appointment_paid' })
+
+    // AFTER COMMIT: automatic refund for late payment on cancelled / no-show bookings.
+    if (result.needsLateRefund) {
+        const refundMeta = await refundLatePaymentIfNeeded({
+            appointmentId: result.appointmentId,
+            amountCents: result.amountCents,
+            createRefundFn,
+        })
+        return {
+            status: 'cancelled_paid',
+            message: 'Payment received for cancelled appointment; refund initiated',
+            appointmentId: result.appointmentId,
+            paymentId: refundMeta.paymentId || result.paymentId,
+            refundOutcome: refundMeta.refundOutcome,
+            paymentStatus: refundMeta.paymentStatus || null,
+        }
+    }
+
+    if (result.inspectForLateRefund && result.appointmentId) {
+        const appointment = await Appointment.findByPk(result.appointmentId)
+        if (
+            appointment &&
+            (appointment.status === APPOINTMENT_STATUS.CANCELLED ||
+                appointment.status === APPOINTMENT_STATUS.NO_SHOW)
+        ) {
+            const refundMeta = await refundLatePaymentIfNeeded({
+                appointmentId: result.appointmentId,
+                amountCents: session?.amount_total ?? null,
+                createRefundFn,
+            })
+            if (refundMeta.refundOutcome && refundMeta.refundOutcome !== 'skipped') {
+                return {
+                    status: 'cancelled_paid',
+                    message: 'Payment received for cancelled appointment; refund initiated',
+                    appointmentId: result.appointmentId,
+                    paymentId: refundMeta.paymentId || null,
+                    refundOutcome: refundMeta.refundOutcome,
+                    paymentStatus: refundMeta.paymentStatus || null,
+                    recoveredFromDuplicate: true,
+                }
+            }
+        }
+    }
+
+    return result
 }
 
 /**
  * UX / browser-return reconciliation. Never the sole source of truth in production
  * (webhooks are), but safely applies the same validation + paid transition.
  */
-export const reconcileCheckoutSession = async (sessionId, { expectedUserId } = {}) => {
+export const reconcileCheckoutSession = async (
+    sessionId,
+    { expectedUserId, createRefundFn = null } = {}
+) => {
     if (!sessionId) {
         return { status: 'rejected', code: 'missing_session', message: 'Missing Stripe session id' }
     }
@@ -514,6 +700,7 @@ export const reconcileCheckoutSession = async (sessionId, { expectedUserId } = {
     return markAppointmentPaidFromCheckoutSession({
         session,
         expectedUserId,
+        createRefundFn,
     })
 }
 

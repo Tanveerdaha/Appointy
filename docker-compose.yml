@@ -36,7 +36,7 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_BACKEND_URL: ${VITE_BACKEND_URL:-http://localhost:4000}
+        VITE_BACKEND_URL: ${VITE_BACKEND_URL}
     ports:
       - "5173:80"
     depends_on:
@@ -46,7 +46,7 @@ services:
     build:
       context: ./admin
       args:
-        VITE_BACKEND_URL: ${VITE_BACKEND_URL:-http://localhost:4000}
+        VITE_BACKEND_URL: ${VITE_BACKEND_URL}
         VITE_CURRENCY: ${VITE_CURRENCY:-PKR}
         VITE_PATIENT_URL: ${VITE_PATIENT_URL:-http://localhost:5173}
     ports:

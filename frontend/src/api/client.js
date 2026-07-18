@@ -1,7 +1,7 @@
 import axios from 'axios'
 
-const DEFAULT_BACKEND_URL = 'http://localhost:4000'
-export const apiBaseUrl = import.meta.env.VITE_BACKEND_URL || DEFAULT_BACKEND_URL
+/** Empty in dev uses Vite proxy (/api → localhost:4000). Set VITE_BACKEND_URL for production. */
+export const apiBaseUrl = import.meta.env.VITE_BACKEND_URL || ''
 
 const AUTH_PATHS = ['/api/user/login', '/api/user/register', '/api/user/refresh']
 

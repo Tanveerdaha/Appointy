@@ -77,8 +77,15 @@ const Doctor = sequelize.define('Doctor', {
 }, {
   tableName: 'doctors',
   timestamps: true,
+  paranoid: true,
   defaultScope: {
     attributes: { exclude: ['password'] },
+  },
+  scopes: {
+    /** Include password hash without bypassing paranoid soft-delete. */
+    withPassword: {
+      attributes: { exclude: [] },
+    },
   },
   hooks: {
     beforeValidate(doctor) {

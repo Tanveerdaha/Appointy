@@ -21,6 +21,7 @@ import {
   isReschedulableStatus,
 } from './appointmentStateService.js'
 import { calculateAppointmentAmount, PricingError } from './pricingService.js'
+import { computeHoldExpiresAt } from './paymentHoldService.js'
 
 export { APPOINTMENT_STATUS, SLOT_HOLDING_STATUSES }
 
@@ -253,6 +254,8 @@ export const createAppointment = async ({
         const status =
           payMode === 'now' ? APPOINTMENT_STATUS.PENDING_PAYMENT : APPOINTMENT_STATUS.CONFIRMED
         const now = new Date()
+        const holdExpiresAt =
+          payMode === 'now' ? computeHoldExpiresAt(now) : null
 
         // Snapshot fee at booking time — never trust client amount / never re-read later.
         const { amount: appointmentAmount, currency } = calculateAppointmentAmount(doctor)
@@ -267,6 +270,7 @@ export const createAppointment = async ({
             currency,
             startTime,
             heldStartTime: startTime,
+            holdExpiresAt,
             slotDate: legacy.slotDate,
             slotTime: legacy.slotTime,
             date: Date.now(),

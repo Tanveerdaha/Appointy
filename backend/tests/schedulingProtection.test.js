@@ -26,7 +26,7 @@ beforeAll(async () => {
     process.env.ADMIN_PASSWORD = 'password123'
     process.env.DB_DIALECT = 'sqlite'
     process.env.SQLITE_STORAGE = ':memory:'
-    process.env.SCHEDULING_UTC_OFFSET_MINUTES = '300'
+    process.env.SCHEDULING_TIMEZONE = 'Asia/Karachi'
 
     const { createApp, initServices } = await import('../app.js')
     User = (await import('../models/userModel.js')).default

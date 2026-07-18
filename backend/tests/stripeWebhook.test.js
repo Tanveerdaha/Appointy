@@ -266,7 +266,7 @@ describe('Stripe webhook payment reliability', () => {
         expect(appointment.paymentStatus).toBe('pending')
     })
 
-    test('cancelled appointment paid webhook does not reactivate booking', async () => {
+    test('cancelled appointment paid webhook does not reactivate booking and records refund attempt', async () => {
         const { user, appointment } = await seedPendingAppointment({
             amount: 500,
             cancelled: true,
@@ -285,10 +285,22 @@ describe('Stripe webhook payment reliability', () => {
         await appointment.reload()
         expect(appointment.cancelled).toBe(true)
         expect(appointment.status).toBe('CANCELLED')
+        // Without a Stripe mock the refund create fails after claim → REFUND_FAILED.
         expect(appointment.paymentStatus).not.toBe('paid')
-        expect(appointment.payment).toBe(false)
+        expect(['refund_failed', 'refund_pending', 'refunded']).toContain(appointment.paymentStatus)
         expect(appointment.stripeCheckoutSessionId).toBe(session.id)
         expect(appointment.stripePaymentIntentId).toBe('pi_test_intent_1')
+
+        const payment = await StripePayment.findOne({
+            where: { appointmentId: appointment.id },
+            order: [['createdAt', 'DESC']],
+        })
+        expect(payment).not.toBeNull()
+        expect(['REFUND_FAILED', 'REFUND_PENDING', 'REFUNDED']).toContain(payment.status)
+
+        const RefundAudit = (await import('../models/refundAuditModel.js')).default
+        const audits = await RefundAudit.findAll({ where: { appointmentId: appointment.id } })
+        expect(audits.length).toBeGreaterThan(0)
     })
 
     test('already-paid appointment remains paid on replay', async () => {

@@ -37,7 +37,7 @@ beforeAll(async () => {
   process.env.ADMIN_PASSWORD = 'password123'
   process.env.DB_DIALECT = 'sqlite'
   process.env.SQLITE_STORAGE = ':memory:'
-  process.env.SCHEDULING_UTC_OFFSET_MINUTES = '300'
+  process.env.SCHEDULING_TIMEZONE = 'Asia/Karachi'
   process.env.CURRENCY = 'pkr'
   process.env.FRONTEND_URL = 'http://localhost:5173'
   process.env.STRIPE_SECRET_KEY = 'sk_test_unit_stripe_secret'
@@ -205,6 +205,8 @@ describe('Transaction lifecycle', () => {
     await appointment.reload()
     expect(appointment.id).toBeTruthy()
     expect(appointment.paymentStatus).toBe(APPOINTMENT_PAYMENT_STATUS.PENDING_RETRY)
+    expect(appointment.status).toBe('PENDING_PAYMENT')
+    expect(appointment.holdExpiresAt).toBeTruthy()
 
     const payment = await StripePayment.findByPk(result.paymentId)
     expect(payment.status).toBe(PAYMENT_STATUS.FAILED)

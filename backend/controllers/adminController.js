@@ -20,9 +20,13 @@ import {
   RefundError,
 } from "../services/cancellationService.js";
 import {
+  retryOrReconcileFailedRefund,
+} from "../services/refundService.js";
+import {
   issueAuthTokens,
   refreshAccessSession,
   logoutSession,
+  revokeSessionsForUser,
   JWT_ROLES,
 } from "../services/authSessionService.js";
 import {
@@ -30,7 +34,9 @@ import {
   updateDoctorFee,
   PricingError,
 } from "../services/pricingService.js";
+import { getNetCollectedMajor } from "../services/earningsService.js";
 import { withTransaction } from "../utils/databaseTransaction.js";
+import DoctorPriceHistory from "../models/doctorPriceHistoryModel.js";
 
 const queueCancellationNotification = (appointment) => {
     try {
@@ -208,6 +214,41 @@ const appointmentCancel = async (req, res) => {
     }
 }
 
+// Idempotent retry / reconcile for REFUND_FAILED payments (admin force).
+const retryRefund = async (req, res) => {
+    try {
+        const { appointmentId } = req.body
+
+        const result = await retryOrReconcileFailedRefund({
+            appointmentId,
+            actorType: ACTOR_TYPE.ADMIN,
+            actorId: null,
+            force: true,
+        })
+
+        const ledgerStatus = result.payment?.status
+        res.json({
+            success: true,
+            message: result.message || 'Refund retry completed',
+            outcome: result.outcome,
+            refundResult: result.refund?.status || result.outcome,
+            refundPending: ledgerStatus === 'REFUND_PENDING' || result.paymentStatus === 'refund_pending',
+            paymentStatus: result.paymentStatus,
+            appointmentStatus: result.appointmentStatus,
+        })
+    } catch (error) {
+        if (error instanceof RefundError || error instanceof LifecycleError) {
+            return res.status(error.statusCode).json({
+                success: false,
+                message: error.message,
+                code: error.code,
+            })
+        }
+        console.log(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
 const allDoctors = async (req, res) => {
     try {
         const doctors = await Doctor.findAll()
@@ -234,22 +275,11 @@ const appointmentsAdmin = async (req, res) => {
 // API to get dashboard data for admin panel
 const adminDashboard = async (req, res) => {
     try {
-        const [doctors, patients, appointments, revenue, paidAppointments, latestAppointments] = await Promise.all([
+        const [doctors, patients, appointments, collected, latestAppointments] = await Promise.all([
             Doctor.count(),
             User.count(),
             Appointment.count(),
-            Appointment.sum('amount', {
-                where: {
-                    status: { [Op.ne]: APPOINTMENT_STATUS.CANCELLED },
-                    paymentStatus: 'paid',
-                },
-            }),
-            Appointment.count({
-                where: {
-                    status: { [Op.ne]: APPOINTMENT_STATUS.CANCELLED },
-                    paymentStatus: 'paid',
-                },
-            }),
+            getNetCollectedMajor(),
             Appointment.findAll({
                 order: [['createdAt', 'DESC']],
                 limit: 5,
@@ -260,8 +290,8 @@ const adminDashboard = async (req, res) => {
             doctors,
             appointments,
             patients,
-            revenue: revenue || 0,
-            paidAppointments,
+            revenue: collected.netCollectedMajor,
+            paidAppointments: collected.paidAppointmentCount,
             latestAppointments,
         }
 
@@ -386,13 +416,18 @@ const listUsers = async (req, res) => {
     }
 }
 
-// API to delete doctor
+// API to delete doctor — soft-delete when history exists; hard-delete only with zero dependents
 const deleteDoctor = async (req, res) => {
     try {
         const { docId } = req.body
 
         if (!docId) {
             return res.status(400).json({ success: false, message: 'Doctor ID required' })
+        }
+
+        const doctor = await Doctor.findByPk(docId)
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: 'Doctor not found' })
         }
 
         const activeAppointments = await Appointment.count({
@@ -403,15 +438,58 @@ const deleteDoctor = async (req, res) => {
         })
 
         if (activeAppointments > 0) {
-            return res.json({ success: false, message: 'Doctor has active appointments. Cancel them first or mark unavailable.' })
+            return res.json({
+                success: false,
+                message: 'Doctor has active appointments. Cancel them first or mark unavailable.',
+            })
         }
 
-        await Doctor.destroy({ where: { id: docId } })
-        res.json({ success: true, message: 'Doctor Deleted' })
+        const appointmentCount = await Appointment.count({ where: { docId } })
+        const priceHistoryCount = await DoctorPriceHistory.count({ where: { doctorId: docId } })
+        const hasHistory = appointmentCount > 0 || priceHistoryCount > 0
+
+        await revokeSessionsForUser({ userId: docId, role: JWT_ROLES.DOCTOR })
+
+        await withTransaction(async (transaction) => {
+            if (hasHistory) {
+                await doctor.update({ available: false }, { transaction })
+                await doctor.destroy({ transaction })
+            } else {
+                await doctor.destroy({ force: true, transaction })
+            }
+        })
+
+        res.json({ success: true, message: 'Doctor Removed' })
     } catch (error) {
         console.log(error)
         res.json({ success: false, message: error.message })
     }
 }
 
-export {loginAdmin, refreshAdminToken, logoutAdmin, addDoctor, allDoctors, appointmentsAdmin, appointmentCancel, adminDashboard, appointmentComplete, updateDoctor, deleteDoctor, listUsers}
+// Toggle a doctor's availability (target from validated body.docId)
+const changeAvailability = async (req, res) => {
+    try {
+        const { docId } = req.body
+
+        if (!docId) {
+            return res.status(400).json({ success: false, message: 'Doctor ID missing' })
+        }
+
+        const doctor = await Doctor.findByPk(docId)
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: 'Doctor not found' })
+        }
+
+        await Doctor.update(
+            { available: !doctor.available },
+            { where: { id: docId } }
+        )
+
+        res.json({ success: true, message: 'Availability changed successfully' })
+    } catch (error) {
+        console.error(error)
+        res.status(500).json({ success: false, message: error.message })
+    }
+}
+
+export {loginAdmin, refreshAdminToken, logoutAdmin, addDoctor, allDoctors, appointmentsAdmin, appointmentCancel, retryRefund, adminDashboard, appointmentComplete, updateDoctor, deleteDoctor, listUsers, changeAvailability}

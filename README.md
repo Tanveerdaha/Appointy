@@ -108,9 +108,10 @@ cd ../admin && npm install
 cp example.env backend/.env
 # fill Cloudinary + Stripe + JWT
 
-cp frontend/.env.example frontend/.env   # VITE_BACKEND_URL=http://localhost:4000
-cp admin/.env.example admin/.env         # VITE_BACKEND_URL=http://localhost:4000
+cp frontend/.env.example frontend/.env   # leave VITE_BACKEND_URL empty for Vite proxy
+cp admin/.env.example admin/.env         # leave VITE_BACKEND_URL empty for Vite proxy
 ```
+
 
 Start MySQL only:
 
@@ -155,7 +156,8 @@ Root template: [`example.env`](example.env) (copy to `.env` and `backend/.env`).
 | `CURRENCY` | e.g. `pkr` |
 | `FRONTEND_URL` | Stripe return URLs + password-reset links |
 | `ALLOWED_ORIGINS` | CORS allowlist (comma-separated) |
-| `VITE_BACKEND_URL` | Browser-reachable API URL (baked into frontend/admin Docker images at **build** time) |
+| `SCHEDULING_TIMEZONE` | IANA clinic timezone for slot hours (default `Asia/Karachi`) |
+| `VITE_BACKEND_URL` | Browser-reachable API URL (**required** for frontend/admin production builds; leave empty in local `npm run dev` to use the Vite `/api` proxy) |
 
 Image uploads go to **Cloudinary only** (no local/base64 storage).
 
@@ -211,6 +213,8 @@ https://<your-api-host>/api/webhooks/stripe
 
 Subscribe at least to `checkout.session.completed` (also handled: `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`).
 
+Pay-now bookings also get a **server-owned** `holdExpiresAt` (`APPOINTMENT_HOLD_EXPIRY_MINUTES`, default 60). A background worker releases expired `PENDING_PAYMENT` holds even when Stripe never created a Checkout session (e.g. after a Stripe outage left `pending_retry`).
+
 ### Schema / migrations
 
 Payment tracing fields (`stripeCheckoutSessionId`, `stripePaymentIntentId`, `paidAt`) and the `stripe_webhook_events` idempotency table are in:
@@ -219,7 +223,7 @@ Payment tracing fields (`stripeCheckoutSessionId`, `stripePaymentIntentId`, `pai
 backend/migrations/20260718000001-stripe-payment-reliability.cjs
 ```
 
-For production, prefer `USE_MIGRATIONS=true` and:
+For production, set `USE_MIGRATIONS=true`, run migrations **before** starting the API, and note that boot **refuses to start** if any migration file is missing from `SequelizeMeta` (it never uses `sequelize.sync` to migrate production):
 
 ```bash
 cd backend && npm run db:migrate
@@ -234,8 +238,8 @@ cd backend && npm run db:migrate
 
 - Set strong `JWT_SECRET` and `ADMIN_PASSWORD`; never ship placeholder Stripe/Cloudinary keys
 - Configure `STRIPE_WEBHOOK_SECRET` and expose `POST /api/webhooks/stripe` publicly (signature-authenticated; no JWT)
-- Prefer `USE_MIGRATIONS=true` and `npm run db:migrate` in `backend/` for schema changes
-- Compose sets `NODE_ENV=production` on the API image; schema sync uses `alter: false` in production
+- Set `USE_MIGRATIONS=true` and run `npm run db:migrate` in `backend/` **before** starting the API; production boot fails fast if migrations are pending (`sequelize.sync` is not used for schema changes)
+- Compose sets `NODE_ENV=production` on the API image; migrate the MySQL volume separately before or alongside deploy
 - Rebuild frontend/admin images after changing `VITE_*` values (`docker compose up --build`)
 - Optional Vercel deploy: `frontend/vercel.json`, `admin/vercel.json`
 

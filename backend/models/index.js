@@ -26,7 +26,7 @@ RefundAudit.belongsTo(Appointment, { foreignKey: 'appointmentId', constraints: f
 StripePayment.hasMany(RefundAudit, { foreignKey: 'paymentTransactionId', constraints: false })
 RefundAudit.belongsTo(StripePayment, { foreignKey: 'paymentTransactionId', constraints: false })
 
-Doctor.hasMany(DoctorPriceHistory, { foreignKey: 'doctorId', onDelete: 'CASCADE' })
+Doctor.hasMany(DoctorPriceHistory, { foreignKey: 'doctorId', onDelete: 'RESTRICT' })
 DoctorPriceHistory.belongsTo(Doctor, { foreignKey: 'doctorId' })
 
 export {

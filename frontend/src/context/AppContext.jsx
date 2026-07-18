@@ -20,6 +20,7 @@ const AppContextProvider = (props) => {
     const [doctorsLoaded, setDoctorsLoaded] = useState(false)
     const [token, setToken] = useState(localStorage.getItem('token') || '')
     const [userData, setUserData] = useState(false)
+    const [schedulingConfig, setSchedulingConfig] = useState(null)
 
     const getDoctorsData = useCallback(async () => {
         try {
@@ -36,6 +37,23 @@ const AppContextProvider = (props) => {
             toast.error(error.response?.data?.message || error.message || 'Failed to load doctors')
         } finally {
             setDoctorsLoaded(true)
+        }
+    }, [])
+
+    const loadSchedulingConfig = useCallback(async () => {
+        try {
+            const { data } = await api.get('/api/scheduling/config')
+            if (data.success) {
+                setSchedulingConfig({
+                    timeZone: data.timeZone,
+                    workStartHour: data.workStartHour,
+                    workEndHour: data.workEndHour,
+                    slotIntervalMinutes: data.slotIntervalMinutes,
+                })
+            }
+        } catch (error) {
+            console.log(error)
+            // Hook falls back to DEFAULT_SCHEDULING_CONFIG (Asia/Karachi)
         }
     }, [])
 
@@ -70,7 +88,8 @@ const AppContextProvider = (props) => {
 
     useEffect(() => {
         getDoctorsData()
-    }, [getDoctorsData])
+        loadSchedulingConfig()
+    }, [getDoctorsData, loadSchedulingConfig])
 
     useEffect(() => {
         if (token) {
@@ -92,6 +111,7 @@ const AppContextProvider = (props) => {
         setUserData,
         loadUserProfileData,
         logout,
+        schedulingConfig,
     }
 
     return (

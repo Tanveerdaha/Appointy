@@ -30,7 +30,7 @@ beforeAll(async () => {
   process.env.CURRENCY = 'PKR'
   process.env.MIN_APPOINTMENT_FEE = '100'
   process.env.MAX_APPOINTMENT_FEE = '1000000'
-  process.env.SCHEDULING_UTC_OFFSET_MINUTES = '300'
+  process.env.SCHEDULING_TIMEZONE = 'Asia/Karachi'
   process.env.STRIPE_SECRET_KEY = 'sk_test_pricing'
   process.env.STRIPE_WEBHOOK_SECRET = 'whsec_pricing'
 

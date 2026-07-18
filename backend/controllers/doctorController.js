@@ -1,12 +1,11 @@
 import bcrypt from "bcrypt";
-import { Op, fn, col } from "sequelize";
+import { Op } from "sequelize";
 import Doctor from "../models/doctorModel.js";
 import Appointment from "../models/appointmentModel.js";
 import {
   completeAppointment as completeAppointmentLifecycle,
   LifecycleError,
   ACTOR_TYPE,
-  APPOINTMENT_STATUS,
 } from "../services/appointmentStateService.js";
 import {
   requestCancellation,
@@ -23,13 +22,19 @@ import {
   updateDoctorFee,
   PricingError,
 } from "../services/pricingService.js";
+import { getNetCollectedMajor } from "../services/earningsService.js";
 import { withTransaction } from "../utils/databaseTransaction.js";
 
 // Doctor login — role is assigned server-side from the doctor table, never from the client.
 const loginDoctor = async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = await Doctor.unscoped().findOne({ where: { email } });
+    // withPassword includes the hash; paranoid still excludes soft-deleted doctors
+    // (unlike unscoped(), which would bypass deletedAt).
+    const user = await Doctor.scope("withPassword").findOne({
+      where: { email },
+      paranoid: true,
+    });
 
     if (!user) {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
@@ -173,16 +178,13 @@ const doctorList = async (req, res) => {
   }
 };
 
-// Toggle doctor's availability
+// Toggle own availability (doctor identity from auth only)
 const changeAvailability = async (req, res) => {
   try {
-    const docId = req.user?.id || req.body.docId;
+    const docId = req.user.id;
+    const { docId: bodyDocId } = req.body;
 
-    if (!docId) {
-      return res.status(400).json({ success: false, message: "Doctor ID missing" });
-    }
-
-    if (req.user?.id && req.body.docId && req.body.docId !== req.user.id) {
+    if (bodyDocId != null && String(bodyDocId) !== String(docId)) {
       return res.status(403).json({ success: false, message: "Unauthorized action" });
     }
 
@@ -270,20 +272,9 @@ const doctorDashboard = async (req, res) => {
   try {
     const docId = req.user.id;
 
-    const [appointmentsCount, earningsRow, patientRows, latestAppointments] = await Promise.all([
+    const [appointmentsCount, earnings, patientRows, latestAppointments] = await Promise.all([
       Appointment.count({ where: { docId } }),
-      Appointment.findAll({
-        where: {
-          docId,
-          status: { [Op.ne]: APPOINTMENT_STATUS.CANCELLED },
-          [Op.or]: [
-            { status: APPOINTMENT_STATUS.COMPLETED },
-            { paymentStatus: 'paid' },
-          ],
-        },
-        attributes: [[fn('SUM', col('amount')), 'total']],
-        raw: true,
-      }),
+      getNetCollectedMajor({ docId }),
       Appointment.findAll({
         where: { docId },
         attributes: ['userId'],
@@ -298,7 +289,7 @@ const doctorDashboard = async (req, res) => {
     ]);
 
     const dashData = {
-      earnings: Number(earningsRow?.[0]?.total) || 0,
+      earnings: earnings.netCollectedMajor,
       appointments: appointmentsCount,
       patients: patientRows.length,
       latestAppointments,

@@ -13,6 +13,10 @@ import {
     APPOINTMENT_STATUS,
 } from './appointmentStateService.js'
 import { withTransaction } from '../utils/databaseTransaction.js'
+import {
+    isPaymentHoldExpired,
+    releaseExpiredPaymentHold,
+} from './paymentHoldService.js'
 
 const logPayment = (level, message, meta = {}) => {
     const payload = { service: 'paymentService', ...meta }
@@ -230,6 +234,16 @@ export const createAppointmentPayment = async (
 
             const nowDate = now()
 
+            if (isPaymentHoldExpired(appointment, nowDate)) {
+                return {
+                    ok: false,
+                    code: 'hold_expired',
+                    message: 'Payment hold expired',
+                    appointmentId: appointment.id,
+                    needsHoldRelease: true,
+                }
+            }
+
             const activePayment = await StripePayment.findOne({
                 where: { appointmentId, status: ACTIVE_PAYMENT_STATUSES },
                 transaction,
@@ -330,7 +344,26 @@ export const createAppointmentPayment = async (
         }
     }
 
-    if (!prepared.ok || prepared.existingPayment || !prepared.needsStripe) {
+    if (!prepared.ok) {
+        if (prepared.code === 'hold_expired' && prepared.needsHoldRelease) {
+            await releaseExpiredPaymentHold(prepared.appointmentId, { now: now() }).catch((error) => {
+                logPayment('error', 'failed to release expired hold after payment refusal', {
+                    appointmentId: prepared.appointmentId,
+                    error: error.message,
+                })
+            })
+            return {
+                ok: false,
+                code: 'hold_expired',
+                message: prepared.message || 'Payment hold expired',
+                appointmentId: prepared.appointmentId,
+                retryable: false,
+            }
+        }
+        return prepared
+    }
+
+    if (prepared.existingPayment || !prepared.needsStripe) {
         return prepared
     }
 

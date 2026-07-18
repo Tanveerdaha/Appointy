@@ -9,9 +9,10 @@
  * - status: scheduling lifecycle independent of paymentStatus
  *
  * Index name unique_doctor_slot enforces one active booking per doctor/time.
+ *
+ * Preflight: aborts before schema changes if legacy slots are unparseable or would
+ * violate UNIQUE(docId, heldStartTime). Never substitutes createdAt for appointment time.
  */
-
-const pad2 = (n) => String(n).padStart(2, '0')
 
 const parseSlotTimeString = (slotTime) => {
   if (typeof slotTime !== 'string') return null
@@ -39,16 +40,67 @@ const parseSlotTimeString = (slotTime) => {
   return null
 }
 
-const offsetMinutes = () => {
-  const raw = process.env.SCHEDULING_UTC_OFFSET_MINUTES
-  if (raw === undefined || raw === '') return 300
-  const n = Number(raw)
-  return Number.isFinite(n) ? n : 300
+const DEFAULT_CLINIC_TIMEZONE = 'Asia/Karachi'
+
+const isValidTimeZone = (tz) => {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: tz })
+    return true
+  } catch {
+    return false
+  }
 }
 
-const fromClinicParts = ({ year, month, day, hour, minute = 0 }) => {
-  const utcMs = Date.UTC(year, month - 1, day, hour, minute, 0) - offsetMinutes() * 60_000
-  return new Date(utcMs)
+const getClinicTimeZone = () => {
+  const raw = process.env.SCHEDULING_TIMEZONE
+  const tz = raw === undefined || raw === '' ? DEFAULT_CLINIC_TIMEZONE : String(raw).trim()
+  return isValidTimeZone(tz) ? tz : DEFAULT_CLINIC_TIMEZONE
+}
+
+const partsFormatterCache = new Map()
+
+const getPartsFormatter = (timeZone) => {
+  let fmt = partsFormatterCache.get(timeZone)
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    })
+    partsFormatterCache.set(timeZone, fmt)
+  }
+  return fmt
+}
+
+const toClinicParts = (date, timeZone = getClinicTimeZone()) => {
+  const map = {}
+  for (const part of getPartsFormatter(timeZone).formatToParts(date)) {
+    if (part.type !== 'literal') map[part.type] = part.value
+  }
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour: Number(map.hour),
+    minute: Number(map.minute),
+    second: Number(map.second),
+  }
+}
+
+const fromClinicParts = ({ year, month, day, hour, minute = 0 }, timeZone = getClinicTimeZone()) => {
+  const desiredAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0)
+  let instant = desiredAsUtc
+  for (let i = 0; i < 2; i++) {
+    const got = toClinicParts(new Date(instant), timeZone)
+    const gotAsUtc = Date.UTC(got.year, got.month - 1, got.day, got.hour, got.minute, got.second)
+    instant += desiredAsUtc - gotAsUtc
+  }
+  return new Date(instant)
 }
 
 const parseLegacySlot = (slotDate, slotTime) => {
@@ -61,9 +113,71 @@ const parseLegacySlot = (slotDate, slotTime) => {
   return fromClinicParts({ year, month, day, hour: time.hour, minute: time.minute })
 }
 
+const resolveLegacyStatus = (row) => {
+  if (row.cancelled) return 'CANCELLED'
+  if (row.isCompleted) return 'COMPLETED'
+  if (row.paymentStatus === 'pending') return 'PENDING_PAYMENT'
+  return 'CONFIRMED'
+}
+
+const SLOT_HOLDING = new Set(['PENDING_PAYMENT', 'CONFIRMED', 'COMPLETED'])
+
 /** @type {import('sequelize-cli').Migration} */
 module.exports = {
   async up(queryInterface, Sequelize) {
+    const [rows] = await queryInterface.sequelize.query(
+      `SELECT id, docId, cancelled, isCompleted, paymentStatus, slotDate, slotTime FROM appointments`
+    )
+
+    const unparseable = []
+    const slotMap = new Map()
+    const duplicates = []
+
+    for (const row of rows) {
+      const status = resolveLegacyStatus(row)
+      const parsed = parseLegacySlot(row.slotDate, row.slotTime)
+
+      if (!parsed) {
+        unparseable.push({
+          id: row.id,
+          docId: row.docId,
+          slotDate: row.slotDate,
+          slotTime: row.slotTime,
+        })
+        continue
+      }
+
+      if (!SLOT_HOLDING.has(status)) continue
+
+      const key = `${row.docId}|${parsed.toISOString()}`
+      if (slotMap.has(key)) {
+        const existing = slotMap.get(key)
+        const entry = duplicates.find((d) => d.key === key)
+        if (entry) {
+          entry.ids.push(row.id)
+        } else {
+          duplicates.push({ key, ids: [existing, row.id] })
+        }
+      } else {
+        slotMap.set(key, row.id)
+      }
+    }
+
+    if (unparseable.length || duplicates.length) {
+      const parts = []
+      if (unparseable.length) {
+        parts.push(
+          `${unparseable.length} unparseable legacy slots: ${JSON.stringify(unparseable.slice(0, 20))}`
+        )
+      }
+      if (duplicates.length) {
+        parts.push(
+          `${duplicates.length} duplicate held doctor slots: ${JSON.stringify(duplicates.slice(0, 20))}`
+        )
+      }
+      throw new Error(`Migration aborted: ${parts.join('; ')}`)
+    }
+
     await queryInterface.addColumn('appointments', 'startTime', {
       type: Sequelize.DATE,
       allowNull: true,
@@ -78,18 +192,9 @@ module.exports = {
       defaultValue: 'CONFIRMED',
     })
 
-    const [rows] = await queryInterface.sequelize.query(
-      `SELECT id, cancelled, isCompleted, paymentStatus, createdAt, slotDate, slotTime FROM appointments`
-    )
-
     for (const row of rows) {
-      let status = 'CONFIRMED'
-      if (row.cancelled) status = 'CANCELLED'
-      else if (row.isCompleted) status = 'COMPLETED'
-      else if (row.paymentStatus === 'pending') status = 'PENDING_PAYMENT'
-
-      const parsed = parseLegacySlot(row.slotDate, row.slotTime)
-      const startTime = parsed || new Date(row.createdAt)
+      const status = resolveLegacyStatus(row)
+      const startTime = parseLegacySlot(row.slotDate, row.slotTime)
       const held =
         status === 'CANCELLED' || status === 'REFUNDED' ? null : startTime
 

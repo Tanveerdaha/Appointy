@@ -22,7 +22,7 @@ const Appointment = () => {
   const [payMode, setPayMode] = useState('later')
   const [booking, setBooking] = useState(false)
 
-  const { docSlots, daysOfWeek } = useAvailableSlots(docInfo)
+  const { docSlots, daysOfWeek, schedulingConfig } = useAvailableSlots(docInfo)
 
   useEffect(() => {
     if (!doctorsLoaded) return
@@ -131,6 +131,9 @@ const Appointment = () => {
       {docInfo.available && (
         <div className='sm:ml-72 sm:pl-4 mt-8 font-medium text-[#565656]'>
           <p>Booking slots</p>
+          <p className='text-xs font-normal text-gray-500 mt-1'>
+            Times in {schedulingConfig.timeZone}
+          </p>
 
           <div className='flex gap-3 items-center w-full overflow-x-scroll mt-4'>
             {docSlots.map((item, index) => (
@@ -139,8 +142,8 @@ const Appointment = () => {
                 key={index}
                 className={`text-center py-6 min-w-16 rounded-full cursor-pointer ${slotIndex === index ? 'bg-primary text-white' : 'border border-[#DDDDDD]'}`}
               >
-                <p>{item[0] && daysOfWeek[item[0].datetime.getDay()]}</p>
-                <p>{item[0] && item[0].datetime.getDate()}</p>
+                <p>{daysOfWeek[item.weekday ?? item[0]?.weekday]}</p>
+                <p>{item.dayOfMonth ?? item[0]?.dayOfMonth}</p>
               </div>
             ))}
           </div>

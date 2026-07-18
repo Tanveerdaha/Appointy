@@ -1,48 +1,123 @@
 /**
  * Canonical appointment slot helpers.
- * Clinic wall-clock times use SCHEDULING_UTC_OFFSET_MINUTES (default +05:00).
+ * Clinic wall-clock times use SCHEDULING_TIMEZONE (IANA, default Asia/Karachi).
  */
 
 export const SLOT_INTERVAL_MINUTES = 30
 export const WORK_START_HOUR = 10
 export const WORK_END_HOUR = 21 // slots run while start < 21:00 → last slot 20:30
 
-export const getClinicOffsetMinutes = () => {
-  const raw = process.env.SCHEDULING_UTC_OFFSET_MINUTES
-  if (raw === undefined || raw === '') return 300
-  const n = Number(raw)
-  return Number.isFinite(n) ? n : 300
+export const DEFAULT_CLINIC_TIMEZONE = 'Asia/Karachi'
+
+const WEEKDAY_TO_INDEX = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
 }
 
-const pad2 = (n) => String(n).padStart(2, '0')
-
-/** Wall-clock parts in the clinic timezone for an absolute Date. */
-export const toClinicParts = (date, offsetMinutes = getClinicOffsetMinutes()) => {
-  const shifted = new Date(date.getTime() + offsetMinutes * 60_000)
-  return {
-    year: shifted.getUTCFullYear(),
-    month: shifted.getUTCMonth() + 1,
-    day: shifted.getUTCDate(),
-    hour: shifted.getUTCHours(),
-    minute: shifted.getUTCMinutes(),
-    second: shifted.getUTCSeconds(),
-    weekday: shifted.getUTCDay(), // 0=Sun
+const isValidTimeZone = (tz) => {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: tz })
+    return true
+  } catch {
+    return false
   }
 }
 
-/** Build a Date from clinic wall-clock components. */
+export const getClinicTimeZone = () => {
+  const raw = process.env.SCHEDULING_TIMEZONE
+  const tz = raw === undefined || raw === '' ? DEFAULT_CLINIC_TIMEZONE : String(raw).trim()
+  return isValidTimeZone(tz) ? tz : DEFAULT_CLINIC_TIMEZONE
+}
+
+const partsFormatterCache = new Map()
+
+const getPartsFormatter = (timeZone) => {
+  let fmt = partsFormatterCache.get(timeZone)
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      weekday: 'short',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    })
+    partsFormatterCache.set(timeZone, fmt)
+  }
+  return fmt
+}
+
+/** Wall-clock parts in the clinic timezone for an absolute Date. */
+export const toClinicParts = (date, timeZone = getClinicTimeZone()) => {
+  const map = {}
+  for (const part of getPartsFormatter(timeZone).formatToParts(date)) {
+    if (part.type !== 'literal') map[part.type] = part.value
+  }
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour: Number(map.hour),
+    minute: Number(map.minute),
+    second: Number(map.second),
+    weekday: WEEKDAY_TO_INDEX[map.weekday] ?? 0,
+  }
+}
+
+/**
+ * UTC offset of the clinic timezone at the given instant, in minutes east of UTC.
+ * e.g. Asia/Karachi → 300
+ */
+export const getClinicOffsetMinutes = (date = new Date(), timeZone = getClinicTimeZone()) => {
+  const p = toClinicParts(date, timeZone)
+  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second)
+  return Math.round((asUtc - date.getTime()) / 60_000)
+}
+
+/** Build a Date from clinic wall-clock components (IANA-aware, DST-safe). */
 export const fromClinicParts = (
   { year, month, day, hour, minute = 0, second = 0 },
-  offsetMinutes = getClinicOffsetMinutes()
+  timeZone = getClinicTimeZone()
 ) => {
-  const utcMs = Date.UTC(year, month - 1, day, hour, minute, second) - offsetMinutes * 60_000
-  return new Date(utcMs)
+  const desiredAsUtc = Date.UTC(year, month - 1, day, hour, minute, second)
+  let instant = desiredAsUtc
+
+  for (let i = 0; i < 2; i++) {
+    const got = toClinicParts(new Date(instant), timeZone)
+    const gotAsUtc = Date.UTC(got.year, got.month - 1, got.day, got.hour, got.minute, got.second)
+    instant += desiredAsUtc - gotAsUtc
+  }
+
+  return new Date(instant)
 }
+
+const pad2 = (n) => String(n).padStart(2, '0')
 
 export const format12h = (hour, minute) => {
   const period = hour >= 12 ? 'PM' : 'AM'
   const h12 = hour % 12 || 12
   return `${pad2(h12)}:${pad2(minute)} ${period}`
+}
+
+/** ISO-8601 with numeric offset for the clinic timezone at this instant. */
+export const toClinicOffsetISOString = (date, timeZone = getClinicTimeZone()) => {
+  const p = toClinicParts(date, timeZone)
+  const offsetMinutes = getClinicOffsetMinutes(date, timeZone)
+  const sign = offsetMinutes >= 0 ? '+' : '-'
+  const abs = Math.abs(offsetMinutes)
+  return (
+    `${p.year}-${pad2(p.month)}-${pad2(p.day)}` +
+    `T${pad2(p.hour)}:${pad2(p.minute)}:${pad2(p.second)}` +
+    `${sign}${pad2(Math.floor(abs / 60))}:${pad2(abs % 60)}`
+  )
 }
 
 export const toLegacySlotFields = (date) => {
@@ -92,8 +167,7 @@ export const parseLegacySlot = (slotDate, slotTime) => {
 }
 
 /**
- * Parse client startTime (ISO-8601). Rejects invalid / missing timezone-less ambiguous forms
- * that lack a numeric offset or Z — except bare local forms we still accept if Date can parse.
+ * Parse client startTime (ISO-8601). Requires explicit numeric offset or Z.
  */
 export const parseStartTimeInput = (value) => {
   if (value instanceof Date) {
@@ -101,7 +175,6 @@ export const parseStartTimeInput = (value) => {
   }
   if (typeof value !== 'string' || !value.trim()) return null
   const trimmed = value.trim()
-  // Require explicit offset or Z for production-safe identity.
   const hasZone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(trimmed)
   if (!hasZone) return null
   const date = new Date(trimmed)
@@ -139,3 +212,11 @@ export const normalizeStartTime = (date) => {
     second: 0,
   })
 }
+
+/** Public scheduling config shared with frontends. */
+export const getSchedulingConfig = () => ({
+  timeZone: getClinicTimeZone(),
+  workStartHour: WORK_START_HOUR,
+  workEndHour: WORK_END_HOUR,
+  slotIntervalMinutes: SLOT_INTERVAL_MINUTES,
+})

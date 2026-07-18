@@ -6,7 +6,7 @@ const RescheduleModal = ({ appointment, doctors, onClose, onConfirm }) => {
   const [selectedSlot, setSelectedSlot] = useState(null)
 
   const docInfo = doctors.find((doc) => (doc.id || doc._id) === appointment.docId)
-  const { docSlots, daysOfWeek } = useAvailableSlots(docInfo)
+  const { docSlots, daysOfWeek, schedulingConfig } = useAvailableSlots(docInfo)
 
   const handleConfirm = () => {
     if (!selectedSlot?.startTime) return
@@ -32,6 +32,7 @@ const RescheduleModal = ({ appointment, doctors, onClose, onConfirm }) => {
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className="bg-white p-6 rounded-lg max-w-lg w-full max-h-[90vh] overflow-y-auto">
         <p className="text-lg font-medium mb-4">Reschedule with {docInfo.name}</p>
+        <p className="text-xs text-gray-500 mb-2">Times in {schedulingConfig.timeZone}</p>
 
         <div className="flex gap-3 overflow-x-auto mt-2">
           {docSlots.map((item, index) => (
@@ -40,8 +41,8 @@ const RescheduleModal = ({ appointment, doctors, onClose, onConfirm }) => {
               key={index}
               className={`text-center py-4 min-w-16 rounded-full cursor-pointer ${slotIndex === index ? 'bg-primary text-white' : 'border border-[#DDDDDD]'}`}
             >
-              <p className="text-xs">{item[0] && daysOfWeek[item[0].datetime.getDay()]}</p>
-              <p>{item[0] && item[0].datetime.getDate()}</p>
+              <p className="text-xs">{daysOfWeek[item.weekday ?? item[0]?.weekday]}</p>
+              <p>{item.dayOfMonth ?? item[0]?.dayOfMonth}</p>
             </div>
           ))}
         </div>

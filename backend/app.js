@@ -10,6 +10,7 @@ import './models/index.js'
 import adminRouter from './routes/adminRoute.js'
 import doctorRouter from './routes/doctorRoute.js'
 import userRouter from './routes/userRoute.js'
+import schedulingRouter from './routes/schedulingRoute.js'
 import webhookRouter from './routes/webhookRoute.js'
 import { notFoundHandler, errorHandler } from './middlewares/errorHandler.js'
 import sequelize from './config/mysql.js'
@@ -84,6 +85,7 @@ export const createApp = () => {
     app.use('/api/admin', adminRouter)
     app.use('/api/doctor', doctorRouter)
     app.use('/api/user', userRouter)
+    app.use('/api/scheduling', schedulingRouter)
 
     app.use(notFoundHandler)
     app.use(errorHandler)
@@ -95,4 +97,22 @@ export const initServices = async () => {
     await connectDB()
     connectCloudinary()
     await initAdminAuth()
+
+    // Automated REFUND_FAILED recovery (DB-backed). Off in tests unless explicitly enabled.
+    const refundWorkerEnabled =
+        process.env.REFUND_RETRY_WORKER_ENABLED === 'true' ||
+        (process.env.REFUND_RETRY_WORKER_ENABLED !== 'false' && process.env.NODE_ENV !== 'test')
+    if (refundWorkerEnabled) {
+        const { startRefundRetryWorker } = await import('./services/refundRetryWorker.js')
+        startRefundRetryWorker()
+    }
+
+    // Server-owned PENDING_PAYMENT hold release. Off in tests unless explicitly enabled.
+    const holdWorkerEnabled =
+        process.env.PAYMENT_HOLD_WORKER_ENABLED === 'true' ||
+        (process.env.PAYMENT_HOLD_WORKER_ENABLED !== 'false' && process.env.NODE_ENV !== 'test')
+    if (holdWorkerEnabled) {
+        const { startPaymentHoldWorker } = await import('./services/paymentHoldWorker.js')
+        startPaymentHoldWorker()
+    }
 }

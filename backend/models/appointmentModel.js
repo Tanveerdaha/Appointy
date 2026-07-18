@@ -133,6 +133,14 @@ const Appointment = sequelize.define('Appointment', {
     type: DataTypes.DATE,
     allowNull: true,
   },
+  /**
+   * Server-owned deadline for PENDING_PAYMENT slot holds.
+   * Independent of Stripe Checkout — released by the payment-hold worker when due.
+   */
+  holdExpiresAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
   /** @deprecated Prefer status — kept for backward compatibility. */
   isCompleted: {
     type: DataTypes.BOOLEAN,
@@ -151,6 +159,7 @@ const Appointment = sequelize.define('Appointment', {
     { fields: ['startTime'] },
     { fields: ['docId', 'status', 'startTime'], name: 'appointments_doc_status_start_time' },
     { fields: ['userId', 'status'], name: 'appointments_user_status' },
+    { fields: ['status', 'holdExpiresAt'], name: 'appointments_status_hold_expires_at' },
     {
       unique: true,
       fields: ['docId', 'heldStartTime'],

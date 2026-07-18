@@ -130,6 +130,19 @@ const StripePayment = sequelize.define('StripePayment', {
     type: DataTypes.DATE,
     allowNull: true,
   },
+  refundRetryCount: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+  },
+  refundNextRetryAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
+  refundLastError: {
+    type: DataTypes.STRING(512),
+    allowNull: true,
+  },
 }, {
   tableName: 'stripe_payments',
   timestamps: true,
@@ -137,6 +150,7 @@ const StripePayment = sequelize.define('StripePayment', {
     { fields: ['appointmentId'] },
     { fields: ['userId'] },
     { fields: ['status'] },
+    { fields: ['status', 'refundNextRetryAt'], name: 'stripe_payments_status_next_retry' },
     { unique: true, fields: ['stripeCheckoutSessionId'] },
     { unique: true, fields: ['stripePaymentIntentId'] },
     { unique: true, fields: ['stripeChargeId'] },

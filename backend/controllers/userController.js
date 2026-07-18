@@ -348,6 +348,7 @@ const PAYMENT_ERROR_STATUS = {
     appointment_not_found: 404,
     unauthorized: 403,
     already_paid: 400,
+    hold_expired: 410,
     stripe_unavailable: 502,
 }
 
@@ -434,8 +435,11 @@ const verifyStripe = async (req, res) => {
         if (result.status === 'cancelled_paid') {
             return res.status(409).json({
                 success: false,
-                message: 'Payment received but appointment is cancelled. Contact support for a refund.',
+                message:
+                    'Payment received but appointment is cancelled. A refund has been initiated.',
                 status: result.status,
+                paymentStatus: result.paymentStatus || null,
+                refundOutcome: result.refundOutcome || null,
             })
         }
 

@@ -37,7 +37,7 @@ beforeAll(async () => {
   process.env.FULL_REFUND_HOURS = '24'
   process.env.PARTIAL_REFUND_HOURS = '2'
   process.env.PARTIAL_REFUND_PERCENT = '50'
-  process.env.SCHEDULING_UTC_OFFSET_MINUTES = '300'
+  process.env.SCHEDULING_TIMEZONE = 'Asia/Karachi'
 
   const { createApp, initServices } = await import('../app.js')
   User = (await import('../models/userModel.js')).default

@@ -56,3 +56,13 @@ export const validateRescheduleBody = (req, res, next) => {
 
   next()
 }
+
+export const validateRetryRefundBody = (req, res, next) => {
+  const { appointmentId } = req.body || {}
+
+  if (!appointmentId || typeof appointmentId !== 'string' || !UUID_RE.test(appointmentId)) {
+    return res.status(400).json({ success: false, message: 'Valid appointmentId is required' })
+  }
+
+  next()
+}

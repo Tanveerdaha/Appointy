@@ -48,6 +48,19 @@ describe('Health', () => {
     })
 })
 
+describe('Scheduling config', () => {
+    test('GET /api/scheduling/config returns clinic timezone', async () => {
+        process.env.SCHEDULING_TIMEZONE = 'Asia/Karachi'
+        const res = await request(app).get('/api/scheduling/config')
+        expect(res.status).toBe(200)
+        expect(res.body.success).toBe(true)
+        expect(res.body.timeZone).toBe('Asia/Karachi')
+        expect(res.body.workStartHour).toBe(10)
+        expect(res.body.workEndHour).toBe(21)
+        expect(res.body.slotIntervalMinutes).toBe(30)
+    })
+})
+
 describe('User auth', () => {
     test('POST /api/user/register creates user', async () => {
         const res = await request(app)

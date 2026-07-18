@@ -1,6 +1,7 @@
 import { Sequelize } from 'sequelize';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { assertNoPendingMigrations } from './migrationStatus.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -54,14 +55,19 @@ export const connectDB = async () => {
       dialect === 'mysql' ? 'MySQL Database Connected' : 'SQLite Database Connected'
     );
 
-    if (process.env.USE_MIGRATIONS === 'true') {
-      console.log('Using migrations (run npm run db:migrate to apply)');
+    // Production (and USE_MIGRATIONS=true) never uses sequelize.sync as a
+    // migration strategy — fail fast if any migration file is still pending.
+    const useMigrations =
+      process.env.NODE_ENV === 'production' ||
+      process.env.USE_MIGRATIONS === 'true';
+    if (useMigrations) {
+      await assertNoPendingMigrations(sequelize);
+      console.log('Database migrations are up to date');
       return;
     }
 
     // alter:true only for local/dev — never auto-alter production schemas
-    const shouldAlter =
-      process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test';
+    const shouldAlter = process.env.NODE_ENV !== 'test';
     await sequelize.sync(shouldAlter ? { alter: true } : { alter: false });
     console.log('Database models synchronized');
   } catch (error) {

@@ -14,7 +14,7 @@ const STRIPE_SECRET = 'sk_test_unit_stripe_secret'
 const stripe = new Stripe(STRIPE_SECRET)
 
 let app
-let User, Doctor, Appointment, StripePayment, StripeWebhookEvent, AppointmentHistory
+let User, Doctor, Appointment, StripePayment, StripeWebhookEvent, AppointmentHistory, RefundAudit
 let createAppointmentPayment, PAYMENT_STATUS, ACTIVE_PAYMENT_STATUSES
 let requestCancellation, ACTOR_TYPE
 let markAppointmentPaidFromCheckoutSession
@@ -50,13 +50,13 @@ beforeAll(async () => {
     ;({ createAppointmentPayment } = await import('../services/paymentService.js'))
     ;({ requestCancellation, ACTOR_TYPE } = await import('../services/cancellationService.js'))
     ;({ markAppointmentPaidFromCheckoutSession } = await import('../services/stripePaymentService.js'))
+    RefundAudit = (await import('../models/refundAuditModel.js')).default
 
     await initServices()
     app = createApp()
 })
 
 beforeEach(async () => {
-    const RefundAudit = (await import('../models/refundAuditModel.js')).default
     await RefundAudit.destroy({ where: {}, truncate: true })
     await StripePayment.destroy({ where: {}, truncate: true })
     await StripeWebhookEvent.destroy({ where: {}, truncate: true })
@@ -508,5 +508,317 @@ describe('Checkout persistence races', () => {
             where: { appointmentId: appointment.id, status: ACTIVE_PAYMENT_STATUSES },
         })
         expect(activeCount).toBe(0)
+    })
+})
+
+const mockRefundCreate = (overrides = {}) => {
+    let calls = 0
+    const createRefundFn = async (params) => {
+        calls += 1
+        return {
+            id: `re_late_${calls}`,
+            object: 'refund',
+            amount: overrides.amount ?? params?.amount ?? 50000,
+            status: overrides.status ?? 'pending',
+            payment_intent: params?.payment_intent || 'pi_late_1',
+            charge: 'ch_late_1',
+            ...overrides,
+        }
+    }
+    createRefundFn.calls = () => calls
+    return createRefundFn
+}
+
+const buildPaidSession = ({ appointmentId, userId, amountTotal = 50000, sessionId, paymentIntent }) => ({
+    id: sessionId || `cs_late_${appointmentId}`,
+    object: 'checkout.session',
+    payment_status: 'paid',
+    amount_total: amountTotal,
+    currency: 'pkr',
+    payment_intent: paymentIntent || `pi_late_${appointmentId}`,
+    metadata: {
+        appointmentId: String(appointmentId),
+        userId: String(userId),
+    },
+})
+
+describe('cancelled_paid automatic refund', () => {
+    test('cancel then paid webhook initiates idempotent refund without reactivating', async () => {
+        const { user, appointment } = await seedAppointment({ paymentStatus: 'pending' })
+        const sessionId = `cs_race_${appointment.id}`
+        const paymentIntent = `pi_race_${appointment.id}`
+
+        await StripePayment.create({
+            appointmentId: appointment.id,
+            userId: user.id,
+            stripeCheckoutSessionId: sessionId,
+            stripePaymentIntentId: paymentIntent,
+            amount: 50000,
+            currency: 'pkr',
+            status: PAYMENT_STATUS.CHECKOUT_CREATED,
+            activeAppointmentId: appointment.id,
+        })
+        await appointment.update({
+            status: 'PENDING_PAYMENT',
+            paymentStatus: 'pending',
+            stripeCheckoutSessionId: sessionId,
+        })
+
+        await requestCancellation({
+            appointmentId: appointment.id,
+            actorType: ACTOR_TYPE.USER,
+            actorId: user.id,
+            expireCheckout: false,
+        })
+
+        await appointment.reload()
+        expect(appointment.status).toBe('CANCELLED')
+
+        const expired = await StripePayment.findOne({ where: { stripeCheckoutSessionId: sessionId } })
+        expect(expired.status).toBe(PAYMENT_STATUS.EXPIRED)
+
+        const createRefundFn = mockRefundCreate({ status: 'pending', amount: 50000 })
+        const result = await markAppointmentPaidFromCheckoutSession({
+            session: buildPaidSession({
+                appointmentId: appointment.id,
+                userId: user.id,
+                sessionId,
+                paymentIntent,
+            }),
+            stripeEventId: `evt_race_${appointment.id}`,
+            eventType: 'checkout.session.completed',
+            createRefundFn,
+        })
+
+        expect(result.status).toBe('cancelled_paid')
+        expect(result.refundOutcome).toBe('refund_pending')
+        expect(createRefundFn.calls()).toBe(1)
+
+        await appointment.reload()
+        expect(appointment.status).toBe('CANCELLED')
+        expect(appointment.paymentStatus).toBe('refund_pending')
+        expect(appointment.payment).toBe(true)
+
+        await expired.reload()
+        expect(expired.status).toBe(PAYMENT_STATUS.REFUND_PENDING)
+        expect(expired.stripeRefundId).toBe('re_late_1')
+
+        const audits = await RefundAudit.findAll({ where: { appointmentId: appointment.id } })
+        expect(audits.length).toBeGreaterThan(0)
+    })
+
+    test('NO_SHOW paid session also auto-refunds', async () => {
+        const { user, appointment } = await seedAppointment({ cancelled: true, paymentStatus: 'unpaid' })
+        await appointment.update({
+            status: 'NO_SHOW',
+            cancelled: false,
+            cancelledAt: null,
+        })
+
+        const createRefundFn = mockRefundCreate({ status: 'succeeded', amount: 50000 })
+        const result = await markAppointmentPaidFromCheckoutSession({
+            session: buildPaidSession({
+                appointmentId: appointment.id,
+                userId: user.id,
+                sessionId: `cs_noshow_${appointment.id}`,
+                paymentIntent: `pi_noshow_${appointment.id}`,
+            }),
+            stripeEventId: `evt_noshow_${appointment.id}`,
+            createRefundFn,
+        })
+
+        expect(result.status).toBe('cancelled_paid')
+        expect(['refund_pending', 'refunded']).toContain(result.refundOutcome)
+
+        await appointment.reload()
+        expect(appointment.status).toBe('NO_SHOW')
+        expect(appointment.paymentStatus).not.toBe('paid')
+
+        const payment = await StripePayment.findOne({ where: { appointmentId: appointment.id } })
+        expect(['REFUND_PENDING', 'REFUNDED']).toContain(payment.status)
+    })
+
+    test('duplicate webhook recovers refund when payment still PAID after crash', async () => {
+        const { user, appointment } = await seedAppointment({ cancelled: true, paymentStatus: 'unpaid' })
+        const sessionId = `cs_crash_${appointment.id}`
+        const paymentIntent = `pi_crash_${appointment.id}`
+        const eventId = `evt_crash_${appointment.id}`
+
+        // Simulate first pass: paid recorded + event claimed, refund never started.
+        await StripePayment.create({
+            appointmentId: appointment.id,
+            userId: user.id,
+            stripeCheckoutSessionId: sessionId,
+            stripePaymentIntentId: paymentIntent,
+            amount: 50000,
+            currency: 'pkr',
+            status: PAYMENT_STATUS.PAID,
+            paidAt: new Date(),
+        })
+        await appointment.update({
+            stripeCheckoutSessionId: sessionId,
+            stripePaymentIntentId: paymentIntent,
+        })
+        await StripeWebhookEvent.create({
+            stripeEventId: eventId,
+            eventType: 'checkout.session.completed',
+            processedAt: new Date(),
+        })
+
+        const createRefundFn = mockRefundCreate({ status: 'pending', amount: 50000 })
+        const result = await markAppointmentPaidFromCheckoutSession({
+            session: buildPaidSession({
+                appointmentId: appointment.id,
+                userId: user.id,
+                sessionId,
+                paymentIntent,
+            }),
+            stripeEventId: eventId,
+            createRefundFn,
+        })
+
+        expect(result.status).toBe('cancelled_paid')
+        expect(result.recoveredFromDuplicate).toBe(true)
+        expect(result.refundOutcome).toBe('refund_pending')
+        expect(createRefundFn.calls()).toBe(1)
+
+        const payment = await StripePayment.findOne({ where: { stripeCheckoutSessionId: sessionId } })
+        expect(payment.status).toBe(PAYMENT_STATUS.REFUND_PENDING)
+    })
+
+    test('concurrent cancelled_paid reconciliations create a single refund', async () => {
+        const { user, appointment } = await seedAppointment({ cancelled: true, paymentStatus: 'unpaid' })
+        const sessionId = `cs_conc_${appointment.id}`
+        const paymentIntent = `pi_conc_${appointment.id}`
+
+        const idempotencyKeys = []
+        let calls = 0
+        const createRefundFn = async (params, options) => {
+            calls += 1
+            idempotencyKeys.push(options?.idempotencyKey)
+            return {
+                id: `re_conc_${calls}`,
+                object: 'refund',
+                amount: params?.amount ?? 50000,
+                status: 'pending',
+                payment_intent: params?.payment_intent || paymentIntent,
+                charge: 'ch_conc_1',
+            }
+        }
+        const session = buildPaidSession({
+            appointmentId: appointment.id,
+            userId: user.id,
+            sessionId,
+            paymentIntent,
+        })
+
+        const [a, b] = await Promise.all([
+            markAppointmentPaidFromCheckoutSession({
+                session,
+                stripeEventId: `evt_conc_a_${appointment.id}`,
+                createRefundFn,
+            }),
+            markAppointmentPaidFromCheckoutSession({
+                session,
+                // Second path without event id (browser verify) races the webhook.
+                createRefundFn,
+            }),
+        ])
+
+        expect(a.status).toBe('cancelled_paid')
+        expect(b.status).toBe('cancelled_paid')
+        expect(calls).toBeGreaterThanOrEqual(1)
+        // Same Stripe idempotency key even if SQLite allows both claim races.
+        expect(new Set(idempotencyKeys).size).toBe(1)
+        expect(idempotencyKeys[0]).toMatch(/^refund_/)
+
+        const payments = await StripePayment.findAll({ where: { appointmentId: appointment.id } })
+        expect(payments).toHaveLength(1)
+        expect([PAYMENT_STATUS.REFUND_PENDING, PAYMENT_STATUS.REFUNDED]).toContain(payments[0].status)
+    })
+
+    test('Stripe refund failure leaves durable REFUND_FAILED and cancelled appointment', async () => {
+        const { user, appointment } = await seedAppointment({ cancelled: true, paymentStatus: 'unpaid' })
+        const createRefundFn = async () => {
+            throw Object.assign(new Error('stripe_down'), { code: 'stripe_unavailable' })
+        }
+
+        const result = await markAppointmentPaidFromCheckoutSession({
+            session: buildPaidSession({
+                appointmentId: appointment.id,
+                userId: user.id,
+                sessionId: `cs_fail_${appointment.id}`,
+                paymentIntent: `pi_fail_${appointment.id}`,
+            }),
+            stripeEventId: `evt_fail_${appointment.id}`,
+            createRefundFn,
+        })
+
+        expect(result.status).toBe('cancelled_paid')
+        expect(result.refundOutcome).toBe('refund_failed')
+
+        await appointment.reload()
+        expect(appointment.status).toBe('CANCELLED')
+        expect(appointment.paymentStatus).toBe('refund_failed')
+        expect(appointment.payment).toBe(true)
+
+        const payment = await StripePayment.findOne({ where: { appointmentId: appointment.id } })
+        expect(payment.status).toBe(PAYMENT_STATUS.REFUND_FAILED)
+
+        const failureAudit = await RefundAudit.findOne({
+            where: { appointmentId: appointment.id, action: 'REFUND_FAILED' },
+        })
+        expect(failureAudit).not.toBeNull()
+    })
+
+    test('duplicate recovers REFUND_PENDING resume after claim crash', async () => {
+        const { user, appointment } = await seedAppointment({ cancelled: true, paymentStatus: 'unpaid' })
+        const sessionId = `cs_resume_${appointment.id}`
+        const paymentIntent = `pi_resume_${appointment.id}`
+        const eventId = `evt_resume_${appointment.id}`
+
+        await StripePayment.create({
+            appointmentId: appointment.id,
+            userId: user.id,
+            stripeCheckoutSessionId: sessionId,
+            stripePaymentIntentId: paymentIntent,
+            amount: 50000,
+            currency: 'pkr',
+            status: PAYMENT_STATUS.REFUND_PENDING,
+            refundAmount: 50000,
+            refundStatus: 'pending',
+            refundReason: 'Payment received after appointment cancellation',
+            paidAt: new Date(),
+        })
+        await appointment.update({
+            paymentStatus: 'refund_pending',
+            payment: true,
+            stripeCheckoutSessionId: sessionId,
+            stripePaymentIntentId: paymentIntent,
+        })
+        await StripeWebhookEvent.create({
+            stripeEventId: eventId,
+            eventType: 'checkout.session.completed',
+            processedAt: new Date(),
+        })
+
+        const createRefundFn = mockRefundCreate({ status: 'succeeded', amount: 50000 })
+        const result = await markAppointmentPaidFromCheckoutSession({
+            session: buildPaidSession({
+                appointmentId: appointment.id,
+                userId: user.id,
+                sessionId,
+                paymentIntent,
+            }),
+            stripeEventId: eventId,
+            createRefundFn,
+        })
+
+        expect(result.status).toBe('cancelled_paid')
+        expect(result.recoveredFromDuplicate).toBe(true)
+        expect(createRefundFn.calls()).toBe(1)
+
+        const payment = await StripePayment.findOne({ where: { stripeCheckoutSessionId: sessionId } })
+        expect(payment.status).toBe(PAYMENT_STATUS.REFUNDED)
     })
 })
