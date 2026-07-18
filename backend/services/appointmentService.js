@@ -20,6 +20,7 @@ import {
   recordInitialStatus,
   isReschedulableStatus,
 } from './appointmentStateService.js'
+import { calculateAppointmentAmount, PricingError } from './pricingService.js'
 
 export { APPOINTMENT_STATUS, SLOT_HOLDING_STATUSES }
 
@@ -261,13 +262,17 @@ export const createAppointment = async ({
         payMode === 'now' ? APPOINTMENT_STATUS.PENDING_PAYMENT : APPOINTMENT_STATUS.CONFIRMED
       const now = new Date()
 
+      // Snapshot fee at booking time — never trust client amount / never re-read later.
+      const { amount: appointmentAmount, currency } = calculateAppointmentAmount(doctor)
+
       const appointment = await Appointment.create(
         {
           userId,
           docId: doctorId,
           userData: userData.toJSON(),
           docData: toSafeDoctorSnapshot(doctor),
-          amount: doctor.fees,
+          amount: appointmentAmount,
+          currency,
           startTime,
           heldStartTime: startTime,
           slotDate: legacy.slotDate,
@@ -320,7 +325,7 @@ export const createAppointment = async ({
         })
       }
 
-      if (error instanceof SchedulingError) {
+      if (error instanceof SchedulingError || error instanceof PricingError) {
         logScheduling('info', 'validation_rejected', {
           doctorId,
           startTime: startTime.toISOString(),

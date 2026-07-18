@@ -6,6 +6,7 @@ import StripeWebhookEvent from './stripeWebhookEventModel.js'
 import StripePayment from './stripePaymentModel.js'
 import RefundAudit from './refundAuditModel.js'
 import RefreshToken from './refreshTokenModel.js'
+import DoctorPriceHistory from './doctorPriceHistoryModel.js'
 
 User.hasMany(Appointment, { foreignKey: 'userId', onDelete: 'RESTRICT' })
 Doctor.hasMany(Appointment, { foreignKey: 'docId', onDelete: 'RESTRICT' })
@@ -25,6 +26,9 @@ RefundAudit.belongsTo(Appointment, { foreignKey: 'appointmentId', constraints: f
 StripePayment.hasMany(RefundAudit, { foreignKey: 'paymentTransactionId', constraints: false })
 RefundAudit.belongsTo(StripePayment, { foreignKey: 'paymentTransactionId', constraints: false })
 
+Doctor.hasMany(DoctorPriceHistory, { foreignKey: 'doctorId', onDelete: 'CASCADE' })
+DoctorPriceHistory.belongsTo(Doctor, { foreignKey: 'doctorId' })
+
 export {
   User,
   Doctor,
@@ -34,4 +38,5 @@ export {
   StripePayment,
   RefundAudit,
   RefreshToken,
+  DoctorPriceHistory,
 }

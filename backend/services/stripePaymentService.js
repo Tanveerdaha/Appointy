@@ -12,6 +12,11 @@ import {
     ACTOR_TYPE,
     transitionAppointment,
 } from './appointmentStateService.js'
+import { toStripeCurrency } from './currencyService.js'
+import {
+    toStripeAmountCents,
+    validateStripeAmount,
+} from './pricingService.js'
 
 const logStripe = (level, message, meta = {}) => {
     const payload = { service: 'stripePayment', ...meta }
@@ -31,10 +36,12 @@ export const getStripe = () => {
     return new Stripe(process.env.STRIPE_SECRET_KEY)
 }
 
-export const getCurrency = () => (process.env.CURRENCY || 'pkr').toLowerCase()
+/** Stripe lowercase currency code (delegates to currencyService). */
+export const getCurrency = (appointment = null) =>
+    toStripeCurrency(appointment?.currency)
 
 export const getExpectedAmountCents = (appointment) =>
-    Math.round(Number(appointment.amount) * 100)
+    toStripeAmountCents(appointment.amount)
 
 /**
  * Create a Stripe Checkout Session.
@@ -56,7 +63,7 @@ export const createStripeCheckoutSession = async (
 ) => {
     const stripe = getStripe()
     const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '')
-    const currency = getCurrency()
+    const currency = getCurrency(appointment)
     const amount = getExpectedAmountCents(appointment)
 
     const params = {
@@ -153,28 +160,26 @@ export const validateStripePayment = (session, appointment, { expectedUserId = n
         return { ok: false, code: 'auth_appointment_mismatch', message: 'Unauthorized action' }
     }
 
-    const expectedAmount = getExpectedAmountCents(appointment)
-    const expectedCurrency = getCurrency()
-    const sessionCurrency = String(session.currency || '').toLowerCase()
+    const amountCheck = validateStripeAmount({
+        stripeAmountTotal: session.amount_total,
+        appointmentAmount: appointment.amount,
+        stripeCurrency: session.currency,
+        appointmentCurrency: appointment.currency,
+    })
 
-    if (Number(session.amount_total) !== expectedAmount) {
-        logStripe('error', 'amount mismatch — refusing to mark paid', {
+    if (!amountCheck.ok) {
+        logStripe('error', 'Stripe amount mismatch — refusing to mark paid', {
             appointmentId: appointment.id,
-            expectedAmount,
-            amountTotal: session.amount_total,
+            expectedAmount: appointment.amount,
+            receivedAmount: session.amount_total,
+            code: amountCheck.code,
             sessionId: session.id,
         })
-        return { ok: false, code: 'amount_mismatch', message: 'Payment amount mismatch' }
-    }
-
-    if (sessionCurrency !== expectedCurrency) {
-        logStripe('error', 'currency mismatch — refusing to mark paid', {
-            appointmentId: appointment.id,
-            expectedCurrency,
-            sessionCurrency,
-            sessionId: session.id,
-        })
-        return { ok: false, code: 'currency_mismatch', message: 'Payment currency mismatch' }
+        return {
+            ok: false,
+            code: amountCheck.code,
+            message: amountCheck.message,
+        }
     }
 
     return { ok: true, appointmentId, metadataUserId }

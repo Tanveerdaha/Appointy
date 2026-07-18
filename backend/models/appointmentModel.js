@@ -87,9 +87,22 @@ const Appointment = sequelize.define('Appointment', {
     type: DataTypes.JSON,
     allowNull: false,
   },
+  /**
+   * Immutable fee snapshot at booking time (major currency units).
+   * Never re-read from doctor.fees after creation — doctor prices may change.
+   */
   amount: {
-    type: DataTypes.INTEGER,
+    type: DataTypes.DECIMAL(10, 2),
     allowNull: false,
+    validate: {
+      min: 0.01,
+    },
+  },
+  /** Canonical ISO currency for amount (e.g. PKR). */
+  currency: {
+    type: DataTypes.STRING(3),
+    allowNull: false,
+    defaultValue: 'PKR',
   },
   date: {
     type: DataTypes.BIGINT,

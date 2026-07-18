@@ -19,6 +19,11 @@ import {
   logoutSession,
   JWT_ROLES,
 } from "../services/authSessionService.js";
+import {
+  updateDoctorFee,
+  PricingError,
+} from "../services/pricingService.js";
+import sequelize from "../config/mysql.js";
 
 // Doctor login — role is assigned server-side from the doctor table, never from the client.
 const loginDoctor = async (req, res) => {
@@ -213,19 +218,48 @@ const doctorProfile = async (req, res) => {
   }
 };
 
-// Update doctor's profile
+// Update doctor's profile (fee changes go through pricingService + audit)
 const updateDoctorProfile = async (req, res) => {
   try {
     const docId = req.user.id;
-    const { fees, address, available, about } = req.body;
+    const { fees, address, available, about, docId: bodyDocId } = req.body;
 
-    await Doctor.update(
-      { fees, address, available, about },
-      { where: { id: docId } }
-    );
+    // Reject attempts to update another doctor's fee via spoofed id.
+    if (bodyDocId != null && String(bodyDocId) !== String(docId)) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
+    const updateData = {};
+    if (address !== undefined) updateData.address = address;
+    if (available !== undefined) updateData.available = available;
+    if (about !== undefined) updateData.about = about;
+
+    await sequelize.transaction(async (transaction) => {
+      if (fees !== undefined) {
+        await updateDoctorFee({
+          doctorId: docId,
+          targetDoctorId: bodyDocId ?? docId,
+          newFee: fees,
+          changedBy: docId,
+          changedByRole: "doctor",
+          transaction,
+        });
+      }
+
+      if (Object.keys(updateData).length > 0) {
+        await Doctor.update(updateData, { where: { id: docId }, transaction });
+      }
+    });
 
     res.json({ success: true, message: "Profile Updated" });
   } catch (error) {
+    if (error instanceof PricingError) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+        code: error.code,
+      });
+    }
     console.error(error);
     res.status(500).json({ success: false, message: error.message });
   }

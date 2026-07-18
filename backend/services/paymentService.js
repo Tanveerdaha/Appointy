@@ -135,7 +135,7 @@ export const createAppointmentPayment = async (
             logPayment('info', 'payment creation started', { appointmentId, userId })
 
             const amount = getExpectedAmountCents(appointment)
-            const currency = getCurrency()
+            const currency = getCurrency(appointment)
 
             const payment = await StripePayment.create(
                 {

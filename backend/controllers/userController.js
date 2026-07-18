@@ -17,6 +17,7 @@ import {
     rescheduleAppointment as rescheduleAppointmentService,
     SchedulingError,
 } from '../services/appointmentService.js'
+import { PricingError } from '../services/pricingService.js'
 import {
     LifecycleError,
     ACTOR_TYPE,
@@ -181,6 +182,7 @@ const updateProfile = async (req, res) => {
 const bookAppointment = async (req, res) => {
     try {
         const userId = req.userId
+        // Never accept client-supplied amount/fees — pricing is derived from doctor.fees.
         const { docId, startTime, slotDate, slotTime, payMode = 'later' } = req.body
 
         const appointment = await createAppointment({

@@ -1,6 +1,9 @@
 import { DataTypes } from 'sequelize';
 import sequelize from '../config/mysql.js';
 
+const MIN_FEE = Number(process.env.MIN_APPOINTMENT_FEE || 100);
+const MAX_FEE = Number(process.env.MAX_APPOINTMENT_FEE || 1000000);
+
 const Doctor = sequelize.define('Doctor', {
   id: {
     type: DataTypes.UUID,
@@ -46,8 +49,18 @@ const Doctor = sequelize.define('Doctor', {
     defaultValue: true,
   },
   fees: {
-    type: DataTypes.INTEGER,
+    type: DataTypes.DECIMAL(10, 2),
     allowNull: false,
+    validate: {
+      min: MIN_FEE,
+      max: MAX_FEE,
+      isPositive(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n) || n <= 0) {
+          throw new Error('Invalid appointment fee');
+        }
+      },
+    },
   },
   slots_booked: {
     type: DataTypes.JSON,

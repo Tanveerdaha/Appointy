@@ -24,6 +24,12 @@ import {
   logoutSession,
   JWT_ROLES,
 } from "../services/authSessionService.js";
+import {
+  validateDoctorFee,
+  updateDoctorFee,
+  PricingError,
+} from "../services/pricingService.js";
+import sequelize from "../config/mysql.js";
 
 // API for admin login — role is assigned server-side after credential check.
 const loginAdmin = async (req, res) => {
@@ -104,6 +110,20 @@ const addDoctor = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid address format" });
     }
 
+    let normalizedFees;
+    try {
+      normalizedFees = validateDoctorFee(fees).fee;
+    } catch (error) {
+      if (error instanceof PricingError) {
+        return res.status(error.statusCode).json({
+          success: false,
+          message: error.message,
+          code: error.code,
+        });
+      }
+      throw error;
+    }
+
     const doctorData = {
       name,
       email,
@@ -113,7 +133,7 @@ const addDoctor = async (req, res) => {
       degree,
       experience,
       about,
-      fees,
+      fees: normalizedFees,
       address: parsedAddress,
       date: Date.now()
     };
@@ -287,7 +307,6 @@ const updateDoctor = async (req, res) => {
         if (degree) updateData.degree = degree
         if (experience) updateData.experience = experience
         if (about) updateData.about = about
-        if (fees) updateData.fees = fees
         if (address) {
             try {
                 updateData.address = typeof address === 'string' ? JSON.parse(address) : address
@@ -299,9 +318,34 @@ const updateDoctor = async (req, res) => {
             updateData.image = await uploadImage(imageFile)
         }
 
-        await Doctor.update(updateData, { where: { id: docId } })
+        const adminActor = req.user?.email || req.user?.id || process.env.ADMIN_EMAIL || 'admin'
+
+        await sequelize.transaction(async (transaction) => {
+            if (fees !== undefined && fees !== null && fees !== '') {
+                await updateDoctorFee({
+                    doctorId: docId,
+                    targetDoctorId: docId,
+                    newFee: fees,
+                    changedBy: String(adminActor),
+                    changedByRole: 'admin',
+                    transaction,
+                })
+            }
+
+            if (Object.keys(updateData).length > 0) {
+                await Doctor.update(updateData, { where: { id: docId }, transaction })
+            }
+        })
+
         res.json({ success: true, message: 'Doctor Updated' })
     } catch (error) {
+        if (error instanceof PricingError) {
+            return res.status(error.statusCode).json({
+                success: false,
+                message: error.message,
+                code: error.code,
+            })
+        }
         console.error('Error updating doctor:', error)
         res.status(500).json({ success: false, message: error.message || 'Internal Server Error' })
     }
