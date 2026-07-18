@@ -7,12 +7,14 @@
  * - Stripe failure after booking leaves appointment intact + pending_retry
  * - Concurrent booking safety
  * - Notification failures do not undo bookings
+ * - Reschedule uses withTransaction (no post-commit rollback risk)
+ * - Concurrent / failed reschedule leaves consistent slot state
  */
 import bcrypt from 'bcrypt'
 import { jest } from '@jest/globals'
 
 let User, Doctor, Appointment, AppointmentHistory, StripePayment
-let createAppointment, SchedulingError
+let createAppointment, rescheduleAppointment, SchedulingError
 let createAppointmentPayment
 let withTransaction, safeRollback
 let PAYMENT_STATUS, APPOINTMENT_PAYMENT_STATUS
@@ -20,6 +22,8 @@ let enqueueNotification, clearNotificationQueue, flushNotificationQueue, getNoti
 let sequelize
 
 const FUTURE_START = new Date('2030-07-22T10:00:00+05:00')
+const FUTURE_START_B = new Date('2030-07-22T10:30:00+05:00')
+const FUTURE_START_C = new Date('2030-07-22T11:00:00+05:00')
 
 beforeAll(async () => {
   process.env.NODE_ENV = 'test'
@@ -50,7 +54,9 @@ beforeAll(async () => {
   StripePayment = paymentModel.default
   PAYMENT_STATUS = paymentModel.PAYMENT_STATUS
   APPOINTMENT_PAYMENT_STATUS = paymentModel.APPOINTMENT_PAYMENT_STATUS
-  ;({ createAppointment, SchedulingError } = await import('../services/appointmentService.js'))
+  ;({ createAppointment, rescheduleAppointment, SchedulingError } = await import(
+    '../services/appointmentService.js'
+  ))
   ;({ createAppointmentPayment } = await import('../services/paymentService.js'))
   ;({ withTransaction, safeRollback } = await import('../utils/databaseTransaction.js'))
   ;({
@@ -370,5 +376,217 @@ describe('Transaction lifecycle', () => {
     const found = await Appointment.findByPk(result.appointmentId)
     expect(found).not.toBeNull()
     expect(found.paymentStatus).toBe('refund_failed')
+  })
+})
+
+describe('Reschedule transaction lifecycle', () => {
+  test('Test 1: successful reschedule commits and moves appointment to new slot', async () => {
+    const user = await seedUser()
+    const doctor = await seedDoctor()
+
+    const appointment = await createAppointment({
+      doctorId: doctor.id,
+      userId: user.id,
+      startTime: FUTURE_START,
+      payMode: 'later',
+    })
+
+    const updated = await rescheduleAppointment({
+      appointmentId: appointment.id,
+      userId: user.id,
+      newStartTime: FUTURE_START_B,
+    })
+
+    expect(new Date(updated.startTime).getTime()).toBe(FUTURE_START_B.getTime())
+    expect(new Date(updated.heldStartTime).getTime()).toBe(FUTURE_START_B.getTime())
+
+    const found = await Appointment.findByPk(appointment.id)
+    expect(new Date(found.startTime).getTime()).toBe(FUTURE_START_B.getTime())
+    expect(new Date(found.heldStartTime).getTime()).toBe(FUTURE_START_B.getTime())
+    expect(found.slotTime).toBe('10:30 AM')
+
+    await doctor.reload()
+    expect(doctor.slots_booked['22_7_2030'] || []).not.toContain('10:00 AM')
+    expect(doctor.slots_booked['22_7_2030']).toContain('10:30 AM')
+  })
+
+  test('Test 2: invalid new slot rolls back — appointment remains unchanged', async () => {
+    const userA = await seedUser('resched_a@test.com')
+    const userB = await seedUser('resched_b@test.com')
+    const doctor = await seedDoctor()
+
+    const apptA = await createAppointment({
+      doctorId: doctor.id,
+      userId: userA.id,
+      startTime: FUTURE_START,
+      payMode: 'later',
+    })
+    const apptB = await createAppointment({
+      doctorId: doctor.id,
+      userId: userB.id,
+      startTime: FUTURE_START_B,
+      payMode: 'later',
+    })
+
+    const before = {
+      startTime: new Date(apptB.startTime).getTime(),
+      heldStartTime: new Date(apptB.heldStartTime).getTime(),
+      slotTime: apptB.slotTime,
+    }
+
+    await expect(
+      rescheduleAppointment({
+        appointmentId: apptB.id,
+        userId: userB.id,
+        newStartTime: FUTURE_START, // occupied by apptA
+      })
+    ).rejects.toMatchObject({
+      name: 'SchedulingError',
+      code: 'slot_unavailable',
+      statusCode: 409,
+    })
+
+    await apptB.reload()
+    expect(new Date(apptB.startTime).getTime()).toBe(before.startTime)
+    expect(new Date(apptB.heldStartTime).getTime()).toBe(before.heldStartTime)
+    expect(apptB.slotTime).toBe(before.slotTime)
+
+    // Occupying appointment untouched
+    await apptA.reload()
+    expect(new Date(apptA.startTime).getTime()).toBe(FUTURE_START.getTime())
+  })
+
+  test('Test 3: concurrent reschedule into same slot — only one succeeds', async () => {
+    const userA = await seedUser('race_a@test.com')
+    const userB = await seedUser('race_b@test.com')
+    const doctor = await seedDoctor()
+
+    const apptA = await createAppointment({
+      doctorId: doctor.id,
+      userId: userA.id,
+      startTime: FUTURE_START,
+      payMode: 'later',
+    })
+    const apptB = await createAppointment({
+      doctorId: doctor.id,
+      userId: userB.id,
+      startTime: FUTURE_START_B,
+      payMode: 'later',
+    })
+
+    const results = await Promise.allSettled([
+      rescheduleAppointment({
+        appointmentId: apptA.id,
+        userId: userA.id,
+        newStartTime: FUTURE_START_C,
+      }),
+      rescheduleAppointment({
+        appointmentId: apptB.id,
+        userId: userB.id,
+        newStartTime: FUTURE_START_C,
+      }),
+    ])
+
+    const fulfilled = results.filter((r) => r.status === 'fulfilled')
+    const rejected = results.filter((r) => r.status === 'rejected')
+
+    expect(fulfilled.length).toBe(1)
+    expect(rejected.length).toBe(1)
+    expect(rejected[0].reason).toBeInstanceOf(SchedulingError)
+    expect(rejected[0].reason.code).toBe('slot_unavailable')
+
+    const atTarget = await Appointment.count({
+      where: {
+        docId: doctor.id,
+        heldStartTime: FUTURE_START_C,
+        status: 'CONFIRMED',
+      },
+    })
+    expect(atTarget).toBe(1)
+  })
+
+  test('Test 4: notification failure after commit leaves appointment rescheduled', async () => {
+    const user = await seedUser()
+    const doctor = await seedDoctor()
+
+    const appointment = await createAppointment({
+      doctorId: doctor.id,
+      userId: user.id,
+      startTime: FUTURE_START,
+      payMode: 'later',
+    })
+
+    await rescheduleAppointment({
+      appointmentId: appointment.id,
+      userId: user.id,
+      newStartTime: FUTURE_START_B,
+    })
+
+    let attempts = 0
+    let sideEffectError = null
+    try {
+      enqueueNotification({
+        type: 'appointment_rescheduled',
+        meta: { appointmentId: appointment.id },
+        maxAttempts: 2,
+        handler: async () => {
+          attempts += 1
+          throw new Error('SMTP down after reschedule')
+        },
+      })
+      await flushNotificationQueue()
+    } catch (error) {
+      // Queue swallows handler errors; any outer failure must not roll back DB.
+      sideEffectError = error
+    }
+
+    expect(sideEffectError).toBeNull()
+    expect(attempts).toBe(2)
+
+    const found = await Appointment.findByPk(appointment.id)
+    expect(new Date(found.startTime).getTime()).toBe(FUTURE_START_B.getTime())
+    expect(found.status).toBe('CONFIRMED')
+    // Critical: no transaction.rollback() after successful reschedule commit.
+  })
+
+  test('Test 5: database error during update rolls back — no partial update', async () => {
+    const user = await seedUser()
+    const doctor = await seedDoctor()
+
+    const appointment = await createAppointment({
+      doctorId: doctor.id,
+      userId: user.id,
+      startTime: FUTURE_START,
+      payMode: 'later',
+    })
+
+    const beforeStart = new Date(appointment.startTime).getTime()
+    const beforeHeld = new Date(appointment.heldStartTime).getTime()
+    await doctor.reload()
+    const beforeSlots = JSON.parse(JSON.stringify(doctor.slots_booked))
+
+    const updateSpy = jest.spyOn(Doctor, 'update').mockRejectedValueOnce(new Error('forced_reschedule_db_failure'))
+
+    try {
+      await expect(
+        rescheduleAppointment({
+          appointmentId: appointment.id,
+          userId: user.id,
+          newStartTime: FUTURE_START_B,
+        })
+      ).rejects.toThrow('forced_reschedule_db_failure')
+    } finally {
+      updateSpy.mockRestore()
+    }
+
+    await appointment.reload()
+    expect(new Date(appointment.startTime).getTime()).toBe(beforeStart)
+    expect(new Date(appointment.heldStartTime).getTime()).toBe(beforeHeld)
+    expect(appointment.slotTime).toBe('10:00 AM')
+
+    await doctor.reload()
+    expect(doctor.slots_booked).toEqual(beforeSlots)
+    expect(doctor.slots_booked['22_7_2030']).toContain('10:00 AM')
+    expect(doctor.slots_booked['22_7_2030'] || []).not.toContain('10:30 AM')
   })
 })
