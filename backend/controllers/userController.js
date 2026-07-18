@@ -42,6 +42,29 @@ const syncPaymentFields = (appointment) => {
     return { ...appointment.toJSON?.() ?? appointment, paymentStatus: status, payment: status === 'paid' }
 }
 
+const queueAppointmentBookedNotification = ({ appointment, userId }) => {
+    try {
+        enqueueNotification({
+            type: 'appointment_booked',
+            meta: { appointmentId: appointment.id },
+            handler: async () => {
+                const user = await User.findByPk(userId)
+                return notifyAppointmentBooked(appointment, user?.email)
+            },
+        })
+    } catch (error) {
+        // Notification scheduling is post-commit and must never fail the booking response.
+        console.error(JSON.stringify({
+            scope: 'booking_notification',
+            level: 'error',
+            message: 'Failed to queue appointment notification',
+            appointmentId: appointment.id,
+            reason: error?.message || 'unknown',
+            at: new Date().toISOString(),
+        }))
+    }
+}
+
 const registerUser = async (req, res) => {
     try {
         const { name, email, password } = req.body;
@@ -195,13 +218,8 @@ const bookAppointment = async (req, res) => {
             payMode,
         })
 
-        // AFTER COMMIT: queue notification — booking must not fail if email fails.
-        const user = await User.findByPk(userId)
-        enqueueNotification({
-            type: 'appointment_booked',
-            meta: { appointmentId: appointment.id },
-            handler: () => notifyAppointmentBooked(appointment, user?.email),
-        })
+        // AFTER COMMIT: user lookup and delivery run in the retryable notification job.
+        queueAppointmentBookedNotification({ appointment, userId })
 
         const response = {
             success: true,

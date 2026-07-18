@@ -9,6 +9,7 @@
  * - Notification failures do not undo bookings
  */
 import bcrypt from 'bcrypt'
+import { jest } from '@jest/globals'
 
 let User, Doctor, Appointment, AppointmentHistory, StripePayment
 let createAppointment, SchedulingError
@@ -117,37 +118,28 @@ describe('Transaction lifecycle', () => {
     expect(found.status).toBe('CONFIRMED')
   })
 
-  test('Test 2: database failure rolls back — no partial record', async () => {
+  test('Test 2: booking database failure rolls back appointment, history, and slot cache', async () => {
     const user = await seedUser()
     const doctor = await seedDoctor()
+    const updateSpy = jest.spyOn(Doctor, 'update').mockRejectedValueOnce(new Error('forced_db_failure'))
 
-    await expect(
-      withTransaction(async (transaction) => {
-        await Appointment.create(
-          {
-            userId: user.id,
-            docId: doctor.id,
-            userData: { id: user.id },
-            docData: { id: doctor.id },
-            amount: 100,
-            currency: 'PKR',
-            startTime: FUTURE_START,
-            heldStartTime: FUTURE_START,
-            slotDate: '22_7_2030',
-            slotTime: '10:00 AM',
-            date: Date.now(),
-            payment: false,
-            paymentStatus: 'unpaid',
-            status: 'CONFIRMED',
-          },
-          { transaction }
-        )
-        throw new Error('forced_db_failure')
-      }, { operation: 'test_rollback' })
-    ).rejects.toThrow('forced_db_failure')
+    try {
+      await expect(
+        createAppointment({
+          doctorId: doctor.id,
+          userId: user.id,
+          startTime: FUTURE_START,
+          payMode: 'later',
+        })
+      ).rejects.toThrow('forced_db_failure')
+    } finally {
+      updateSpy.mockRestore()
+    }
 
-    const count = await Appointment.count()
-    expect(count).toBe(0)
+    expect(await Appointment.count()).toBe(0)
+    expect(await AppointmentHistory.count()).toBe(0)
+    await doctor.reload()
+    expect(doctor.slots_booked).toEqual({})
   })
 
   test('Test 3: error after commit does not rollback appointment', async () => {
