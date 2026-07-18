@@ -7,6 +7,7 @@ import { uploadImage } from "../utils/uploadImage.js";
 import User from "../models/userModel.js"
 import { verifyAdminPassword } from "../middlewares/authAdmin.js";
 import { notifyAppointmentCancelled } from "../services/notificationService.js";
+import { enqueueNotification } from "../services/notificationQueue.js";
 import {
   completeAppointment as completeAppointmentLifecycle,
   LifecycleError,
@@ -30,6 +31,26 @@ import {
   PricingError,
 } from "../services/pricingService.js";
 import { withTransaction } from "../utils/databaseTransaction.js";
+
+const queueCancellationNotification = (appointment) => {
+    try {
+        enqueueNotification({
+            type: 'appointment_cancelled',
+            meta: { appointmentId: appointment.id },
+            handler: () => notifyAppointmentCancelled(appointment, appointment.userData?.email),
+        })
+    } catch (error) {
+        // Cancellation is already committed; notification failures are post-commit only.
+        console.error(JSON.stringify({
+            scope: 'cancellation_notification',
+            level: 'error',
+            message: 'Failed to queue cancellation notification',
+            appointmentId: appointment.id,
+            reason: error?.message || 'unknown',
+            at: new Date().toISOString(),
+        }))
+    }
+}
 
 // API for admin login — role is assigned server-side after credential check.
 const loginAdmin = async (req, res) => {
@@ -160,7 +181,7 @@ const appointmentCancel = async (req, res) => {
             reason,
         })
 
-        notifyAppointmentCancelled(result.appointment, result.appointment.userData?.email).catch(console.error)
+        queueCancellationNotification(result.appointment)
 
         res.json({
             success: true,

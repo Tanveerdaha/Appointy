@@ -65,6 +65,29 @@ const queueAppointmentBookedNotification = ({ appointment, userId }) => {
     }
 }
 
+const queueAppointmentCancelledNotification = ({ appointment, userId }) => {
+    try {
+        enqueueNotification({
+            type: 'appointment_cancelled',
+            meta: { appointmentId: appointment.id },
+            handler: async () => {
+                const user = await User.findByPk(userId)
+                return notifyAppointmentCancelled(appointment, user?.email)
+            },
+        })
+    } catch (error) {
+        // Cancellation is already committed; notification failures are post-commit only.
+        console.error(JSON.stringify({
+            scope: 'cancellation_notification',
+            level: 'error',
+            message: 'Failed to queue cancellation notification',
+            appointmentId: appointment.id,
+            reason: error?.message || 'unknown',
+            at: new Date().toISOString(),
+        }))
+    }
+}
+
 const registerUser = async (req, res) => {
     try {
         const { name, email, password } = req.body;
@@ -275,11 +298,9 @@ const cancelAppointment = async (req, res) => {
             reason: reason || 'Cancelled by patient',
         })
 
-        const user = await User.findByPk(userId)
-        enqueueNotification({
-            type: 'appointment_cancelled',
-            meta: { appointmentId: result.appointment?.id },
-            handler: () => notifyAppointmentCancelled(result.appointment, user?.email),
+        queueAppointmentCancelledNotification({
+            appointment: result.appointment,
+            userId,
         })
 
         res.json({
