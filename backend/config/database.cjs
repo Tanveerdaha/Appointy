@@ -1,5 +1,8 @@
 'use strict'
 
+
+require('dotenv').config();
+
 const path = require('path')
 
 const dialect = (process.env.DB_DIALECT || 'mysql').toLowerCase()
